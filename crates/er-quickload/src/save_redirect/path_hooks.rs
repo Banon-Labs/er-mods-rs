@@ -1169,7 +1169,7 @@ pub(crate) fn staged_save_container_names() -> &'static [&'static str] {
 ///
 /// * **Seamless** takes both the co-op container and `ER0000.sl2`, preferring the co-op one when
 ///   both exist. Refusing a vanilla `.sl2` here is what softlocked the loading screen on
-///   2026-08-02 (bd `er-effects-rs-h6sh`): the picker legitimately accepted one and nothing
+///   2026-08-02: the picker legitimately accepted one and nothing
 ///   downstream would load it. The co-op container is whatever ERSC is configured with -- see
 ///   [`seamless_save_container_name`] -- not a fixed `ER0000.co2`.
 /// * **Vanilla** takes only `ER0000.sl2`. A vanilla launch must never silently load the Seamless
@@ -1463,7 +1463,7 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         ));
         return SaveOverrideMode::TelemetryOnly;
     }
-    // The container is not KNOWABLE here (bd er-effects-rs-1742). This function runs early in
+    // The container is not KNOWABLE here. This function runs early in
     // DllMain, and me3 loads `ersc.dll` after us -- so `seamless_coop_loaded()` answers a false
     // negative at this instant, and `active_default_save_file_name()` turns that into
     // `ER0000.sl2`. On a Seamless launch that is the container the runtime never opens: measured
@@ -2466,8 +2466,8 @@ mod save_container_mode_lock_tests {
     use er_save_redirect::is_staged_save_container_name;
 
     /// The mode lock is asymmetric and must stay that way (user spec 2026-08-02). A symmetric
-    /// one-container-per-mode rule is what softlocked the loading screen for 46s on 2026-08-02
-    /// (bd `er-effects-rs-h6sh`): a picked `.sl2` staged under a Seamless run that then refused
+    /// one-container-per-mode rule is what softlocked the loading screen for 46s on 2026-08-02:
+    /// a picked `.sl2` staged under a Seamless run that then refused
     /// to load anything but `.co2`.
     ///
     /// Under test there is no live ERSC module, so `save_picker_seamless_mode_after_settle` is

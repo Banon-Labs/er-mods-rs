@@ -488,7 +488,7 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
 ) -> usize {
     let slot_i32 = slot as i32;
     let expected_slot = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-    // The explicit boot slot beats the container'S stored slot (bd er-effects-rs-daq7 / 91zb).
+    // The explicit boot slot beats the container'S stored slot.
     //
     // This builder's `r8d` slot argument is what the LoadGame job is built for, and on the
     // TitleTopDialog Continue path it comes from `CSMenuSystemSaveLoad+0x1200` -- the last-used

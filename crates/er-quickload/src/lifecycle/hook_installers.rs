@@ -13,7 +13,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
             .spawn(install_profile_renderer_teardown_spare_hook);
     });
 
-    // Profile-renderer table guard (er-effects-rs-j3r): before the native per-slot thumbnail
+    // Profile-renderer table guard: before the native per-slot thumbnail
     // builder runs, log a degraded 10-slot table, rebuild a fully-empty one via the engine's own
     // table setup (only the TitleTopDialog ctor ever calls it natively, so nothing repopulates it
     // across our in-world ProfileSelect reopens -- the 3rd open crashed on the empty table), and
@@ -48,7 +48,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
 
     // Read-only teardown-requester trace: EzChildStepBase::RequestFinish. Identifies who requests
     // the in-world MoveMapStep child's finish -- the post-switch reload bounce is a stale finish
-    // request hitting the freshly-created map session (er-effects-rs-qwj investigation).
+    // request hitting the freshly-created map session.
     #[cfg(feature = "quit-rows")]
     START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK.call_once(|| {
         let _ = std::thread::Builder::new()
@@ -93,7 +93,7 @@ pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
                 .spawn(install_safe_input_hooks);
         });
     }
-    // Observe-only user32 window-reconfiguration timeline (bd er-effects-rs-rzow): installed at
+    // Observe-only user32 window-reconfiguration timeline: installed at
     // attach so CreateWindowExW is covered before the game builds its startup window. Pure
     // passthrough logging/counting; the RAM semaphore for the mid-boot fullscreen transition
     // whose XWayland servicing blacks the presented surface for a few frames.

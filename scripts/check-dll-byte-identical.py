@@ -30,7 +30,7 @@ er-game-base carries a 12-byte ASCII commit id in .rdata -- and that is EVERY
 shipped DLL. It therefore differs on every PR that has any commit at all, which
 made this gate unpassable by construction rather than by anything an author did.
 
-Measured, PR #392 run 33794571494: all 26 shipped cdylibs changed, every one of
+Measured, CI run 33794571494: all 26 shipped cdylibs changed, every one of
 them by exactly 24 bytes in 2 runs of 12, every run in .rdata, and the report
 printed the two strings for each -- 'a56af6a06c03' (the merge-base) against
 '0be70e7616f6' (the head). The PR's only Rust changes were inside `#[cfg(test)]`

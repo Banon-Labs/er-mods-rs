@@ -66,8 +66,7 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
     // post-deserialize sample report the save's entire stored playtime as "advance" (measured run
     // product-continue-direct-20260729-205115: oracle_play_time_advanced_ms == oracle_play_time_ms
     // == 388876164, ~108h) -> play_time_live falsely latched BOOT_VIEW_EPOCH_WORLD_LIVE for epoch 0
-    // at ~+16s, mid boot loading screen, freezing the loading-portrait drive tick (bd
-    // er-effects-rs-io53). Requiring > 0 latches the baseline at the character's real loaded
+    // at ~+16s, mid boot loading screen, freezing the loading-portrait drive tick. Requiring > 0 latches the baseline at the character's real loaded
     // playtime, so `advanced` measures only genuine world-sim stepping.
     if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0 && play_time_ms > 0 {
         PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);

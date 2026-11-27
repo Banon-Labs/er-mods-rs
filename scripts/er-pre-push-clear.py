@@ -7,7 +7,7 @@ Called by `scripts/hooks/pre-push`. Two subcommands:
     refund --reason <token> --pair <local ref> <sha> [--pair ...]
 
 Why it exists. 2026-10-27: the user replied `authorize 6e313ae7...`, the main agent ran
-`git push origin fix/crash-logging-freelist-quit-patch` while the run it had launched to stamp that
+`git push origin <branch>` while the run it had launched to stamp that
 tip (br-20261027-210646-679a) was still up, and the hook's `scripts/check.sh` refused with
 "check.sh: REFUSED -- Elden Ring is running." The push sent nothing, but
 `scripts/cupcake_push_authorization.py` had already recorded the reply as spent at PreToolUse, so

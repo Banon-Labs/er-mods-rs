@@ -285,7 +285,7 @@ pub fn title_dialog_a40(base: usize) -> i32 {
 /// Press any button ready and the menu not yet opened: outer state == 10, dialog a40 == 0, and the
 /// dialog's own state machine settled in `Loop`.
 ///
-/// The third clause was added 2026-09-12 (bd er-effects-rs-9gxt). Without it this reports "parked"
+/// The third clause was added 2026-09-12. Without it this reports "parked"
 /// for a dialog that is still fading in or still tearing down, and the phase that gates on it hands
 /// the next phase a title that cannot accept a press -- which is how `press_any_button` came to
 /// report success one frame after entering.

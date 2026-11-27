@@ -17,12 +17,12 @@ import data.cupcake.system.commands
 # Missing or unequal OIDs fail closed. Fetch origin/main before rebasing a PR
 # branch onto it or force-pushing that branch.
 #
-# Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e): the three
-# patterns below anchor on `(^|[;&|][[:space:]]*|\n)`, which no more contains a
-# quote than the main-push guard's class did -- so `bash -c 'git push --force
-# origin x'` matched nothing and ran against an unverified origin/main. They now
-# run over commands.executed_texts, so a wrapper payload is a text of its own,
-# while quoted prose loses its command positions. See the header of
+# Shell-wrapper decomposition (2026-08-26): the three patterns below anchor on
+# `(^|[;&|][[:space:]]*|\n)`, which no more contains a quote than the main-push
+# guard's class did -- so `bash -c 'git push --force origin x'` matched nothing
+# and ran against an unverified origin/main. They now run over
+# commands.executed_texts, so a wrapper payload is a text of its own, while
+# quoted prose loses its command positions. See the header of
 # .cupcake/system/commands.rego.
 deny contains decision if {
     input.hook_event_name == "PreToolUse"

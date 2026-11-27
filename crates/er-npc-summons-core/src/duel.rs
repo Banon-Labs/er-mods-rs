@@ -42,7 +42,7 @@ pub const SUMMON_ENTITY_ID: u32 = 35_000;
 /// `GetChrInsByEntityId` find it and nothing else. `ChrSet::SpawnChr` registers the new
 /// character in its set's entity map under the request's id, and that map is what the lookup
 /// searches; the map is ordered and the lookup takes the first match, which is how a live Mimic
-/// companion was found in the duel NPC's place on 2026-10-06 (bd `er-effects-rs-gqu9`). It stays
+/// companion was found in the duel NPC's place on 2026-10-06. It stays
 /// in the 30000..39999 band 35000 is in, which `GetChrInsByEntityId` treats as an id no map
 /// owns. The DLL checks that nothing is registered under it before a spawn.
 pub const DUEL_ENTITY_ID: u32 = 35_001;

@@ -71,36 +71,25 @@ fanout_word(word) if contains(word, "xargs")
 
 fanout_word(word) if contains(word, "parallel")
 
-# Words that may stand in front of the program without being it, beyond the shared set in
-# `commands.command_slot_wrapper`. `systemd-run` is one on purpose: `systemd-run --user
-# --scope xargs -P 16 ...` with no MemoryMax has to be read as the fan-out it is.
-extra_slot_prefixes := {"{", "!", "time", "ionice", "chrt", "systemd-run"}
-
 # systemd-run options whose value is the next word, so `--unit fanout xargs ...` does not
-# read `fanout` as the program.
+# read `fanout` as the command systemd-run starts (`systemd_run_command_start` below).
 systemd_run_argument_options := {
 	"-p", "--property", "-u", "--unit", "--slice", "-E", "--setenv", "--description",
 	"--working-directory", "-M", "--machine", "-H", "--host", "--uid", "--gid", "--nice",
 }
 
-slot_prefix(words, position) if commands.command_slot_wrapper_at(words, position)
-
-slot_prefix(words, position) if program_name(words[position]) in extra_slot_prefixes
-
-slot_prefix(words, position) if {
-	position > 0
-	bare(words[position - 1]) in systemd_run_argument_options
-}
-
-in_command_slot(words, index) if {
-	start := commands.command_slot_start(words, index)
-	count([position |
-		some position, _ in words
-		position >= start
-		position < index
-		not slot_prefix(words, position)
-	]) == 0
-}
+# The fan-out tool is the program its statement runs, read by the shared test.
+# `systemd-run --user --scope xargs -P 16 ...` with no MemoryMax has to be read as the
+# fan-out it is, and so does every other launcher in front of it.
+#
+# This guard used to carry its own copy of that test, with `{`, `!`, `time`, `ionice`,
+# `chrt` and `systemd-run` (and the values of systemd-run's options) as extra prefixes. A
+# launcher's non-numeric operand stopped it: `taskset -c 0-3 xargs -P 16 ...` and
+# `ionice -c idle xargs -P 16 ...` were allowed until 2026-11-19. The shared test now reads
+# `{` and `!` as wrappers and follows every launcher this copy listed, with each one's
+# options and operands from its own `--help`. See "EXEC LAUNCHERS" in
+# `.cupcake/system/commands.rego`.
+in_command_slot(words, index) if commands.launched_word_in_command_slot(words, index)
 
 # `command -v parallel` asks whether the tool exists; it runs nothing.
 existence_check(words, index) if {

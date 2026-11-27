@@ -9,7 +9,7 @@ is whatever they have checked out -- frequently a fork branch carrying types ups
 merged. Nothing reconciles the two, so `scripts/check.sh` compiles against the fork, goes green,
 and CI then fails on `unresolved import` for a name that only ever existed on one machine.
 
-That is not hypothetical: PRs #322 and #323 could not compile in CI at all because they used
+That is not hypothetical: two pull requests could not compile in CI at all because they used
 `eldenring::cs::MsgRepositoryImp`, which exists only in a local fork. Both were locally green.
 
 Rebuilding the whole workspace against the pinned revision would catch it, and costs a second

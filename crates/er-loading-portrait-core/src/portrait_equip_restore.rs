@@ -35,7 +35,7 @@
 //! render path resolves equipment from the id array alone (`GetProtectorParamIdBySlot` is
 //! `mov 0x7c(%rcx,%rdx,4),%eax`), while the handle array is refcounted state this process owns --
 //! the feed put two real default-protector handles in it, and stealing or overwriting those is how
-//! PR #128 broke refcounts without fixing the picture.
+//! an earlier attempt broke refcounts without fixing the picture.
 //!
 //! This module is the deterministic half: which indices differ, and what to report about them. The
 //! unsafe read/write of live renderer memory stays with the caller.

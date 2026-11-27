@@ -68,7 +68,7 @@ fn poll_cached_mms18_ending_request_advancer() {
         .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
         .unwrap_or(-1);
     // Why `warpRequested == 0` is the right second condition, and why the mms/requestCode shape is
-    // not (RE er-effects-rs-9fmm, re-confirmed by the 2026-09-04 revert).
+    // not (RE, re-confirmed by the 2026-09-04 revert).
     //
     // RE-grounded on 1.17 (2026-09-04). The reading below was originally decompiled off the 1.16.2
     // dump on :8765; the installed game was 1.17 at the time (2.7.2.0 since 2026-10-20, where the
@@ -315,7 +315,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
-                    // Answer the container question DllMain could not (bd er-effects-rs-1742).
+                    // Answer the container question DllMain could not.
                     // Idempotent after the first call; a no-op on every run that did not defer.
                     resolve_deferred_save_override();
                     // Repair the profile summary before the title builds its continue row.
@@ -377,7 +377,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            // Deliberate behavior change (bd er-effects-rs-91zb; Implemented but
+                            // Deliberate behavior change (Implemented but
                             // UNPROVEN -- no live run has exercised it). The missing-save picker
                             // cannot set a config slot; its character sub-picker records the chosen
                             // slot here. This used to be `autoload.slot().or_else(picker)` --

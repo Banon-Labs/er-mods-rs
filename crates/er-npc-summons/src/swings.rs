@@ -1,7 +1,7 @@
 //! A swing about to land on the squad: `LAB_WORLD.tt_roll`, `tt_roll_d`, `tt_roll_p` and
 //! `tt_roll_parry`, which the turtles' brain rolls (or parries) on.
 //!
-//! A port of the lab's `readSwings` (`scripts/frida/spawn-npc.js` on `feat/ai-lab-turtles`).
+//! A port of the lab's `readSwings` (`scripts/frida/spawn-npc.js`).
 //! Every frame, each character near the squad (`watched`: alive, within [`READ_RADIUS`] m of a
 //! companion, re-listed every [`READ_LIST_MS`]) has its newest TimeAct entry read; an attack
 //! animation (`anim % 1000000` in 3000..=3999) that has run to [`ROLL_LEAD`] s short of its windup

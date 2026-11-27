@@ -1,0 +1,3 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "how is the kit run going?"}]}}
+
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The fix for the time-left estimate is written and tested, and I'll apply it when the kit run (b3fgttzcf) ends."}]}}

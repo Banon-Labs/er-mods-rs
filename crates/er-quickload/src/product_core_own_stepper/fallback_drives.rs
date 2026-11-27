@@ -451,7 +451,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // and a switch never can. Measured: the accept byte is written correctly and
                 // repeatedly post-switch -- it resolves fine (2.7.2.0 0x144590c7c) -- and the
                 // title still sits at press button for
-                // 185s, because behind that gate nothing reads it (bd er-effects-rs-tkfb).
+                // 185s, because behind that gate nothing reads it.
                 //
                 // FadeIn/TextFadeOut stay excluded: firing during the fade corrupts the state
                 // machine (bd titletopdialog-fadein-gate), and those are exactly the two states

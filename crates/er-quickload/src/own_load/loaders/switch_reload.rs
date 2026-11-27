@@ -168,7 +168,7 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     ok
 }
 
-// FD4-IO residency for the menu-free switch reload (bd er-effects-rs-9fmm, 2026-07-19) is now default
+// FD4-IO residency for the menu-free switch reload (2026-07-19) is now default
 // behavior in own_load_switch_reload_fire (the boot native-fullread submit -> drain(b80==resident) ->
 // commit sequence), replacing the old resource-less one-shot. No marker/env gate.
 
@@ -178,7 +178,7 @@ pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_DRAIN_WAITS;
 /// across the caller's per-frame retries. 0=idle (do submit once), 1=drain (tick until b80==3),
 /// 2=commit (fall through to feed+continue_confirm).
 pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_PHASE;
-// The phase values moved next to the atomic in er-telemetry-core (2026-07-31, bd er-effects-rs-9jbe):
+// The phase values moved next to the atomic in er-telemetry-core (2026-07-31):
 // er-title-flow's b78 guard now reads this phase to detect that fd4io owns GameMan+0xb78, and that
 // crate must not depend on the root crate. This file remains the only writer of the phase machine.
 pub(crate) use er_telemetry_core::counters::SWITCH_RELOAD_FD4IO_COMMIT;
@@ -408,7 +408,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
             }
         }
     }
-    // (b) FD4-IO residency phase machine (default behavior -- no marker/env toggle; bd er-effects-rs-9fmm):
+    // (b) FD4-IO residency phase machine (default behavior -- no marker/env toggle):
     // Submit the full read, drain until GameMan+0xb80==resident(3), then fall through to
     // feed+continue_confirm -- so the reload's streamed world has the resources natively resident (the
     // boot path's behavior) instead of entering resource-less and reverting to title. Owner is already
@@ -490,7 +490,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 // warp target -> warp_requested stuck at 1 and STEP_MoveMap self-loops at 18 (observed
                 // in the b78-disarm build: world resident, real char, but mms18 next=18/done50=0
                 // warp=1 forever).
-                // Who actually clears b78 (corrected 2026-08-01, bd er-effects-rs-0nie): Not the
+                // Who actually clears b78 (corrected 2026-08-01): Not the
                 // continue_confirm hook -- that stopped writing OWN_STEPPER_SLOT_NONE at 1a0ad8e4.
                 // The remaining clearer on this path is system_quit_inworld_load_skip_hook
                 // (system_quit_repro_guards.rs), which hooks SYSTEM_QUIT_INWORLD_LOAD_RVA 0x67c590 --

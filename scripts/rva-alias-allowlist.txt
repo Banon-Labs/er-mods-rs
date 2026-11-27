@@ -143,10 +143,10 @@
 # `exempt:not-an-address` rather than duplicates.
 #
 # They were `todo:` and not `exempt:` because the debt was real, and this is how it cleared: the
-# fork was deleted rather than reconciled (phase 3 of `docs/plans/menus-and-saves-consolidation.md`,
-# bd er-effects-rs-8rho), so one declaration survives each address and the rows go. The extraction
-# bd er-effects-rs-ejfl measured -- 5,000 to 10,500 lines, blocked on splitting
-# `system_quit_menu_window_run_post` -- is still undone and is still what a SECOND row shell would
+# fork was deleted rather than reconciled (phase 3 of
+# `docs/plans/menus-and-saves-consolidation.md`), so one declaration survives each address and the
+# rows go. The extraction that was measured at 5,000 to 10,500 lines, blocked on splitting
+# `system_quit_menu_window_run_post`, is still undone and is still what a SECOND row shell would
 # need; it is no longer what this file is waiting on.
 0x3f0e20    todo:centralize-function-rva  # CHR_INS_GET_PHYSICS_POSITION_RVA, GET_PHYSICS_POS (was 0x3f0bf0)  || 1.16.2 `ChrIns::GetPhysicsPosition(ChrIns*, FloatVector4*)`. er-npc-summons does not depend on er-invasion-warp-core; centralise both on the Ghidra name.
 0x61f420    todo:centralize-function-rva  # BLOCK_TO_PHYSICS, CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA (was 0x61e120)  || 1.16.2 `ConvertBlockCoordsToPhysicsCoords(out, blockLocal, BlockId*)`. Same function, two crates with no dependency between them.

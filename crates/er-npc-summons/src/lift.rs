@@ -2,7 +2,7 @@
 //!
 //! The first `facts` producer: `LAB_WORLD.player_on_lift` and `LAB_WORLD.tt_lift_off_p`, which the
 //! turtles' brain reads in `TT_on_lift`. A port of the lab's `liftCheck` (`scripts/frida/
-//! spawn-npc.js` on `feat/ai-lab-turtles`), whose every offset was measured live on 1.17.1 (bd
+//! spawn-npc.js`), whose every offset was measured live on 1.17.1 (bd
 //! `lift-detection-ground-handle-1171-2026-10-05`):
 //!
 //! - what a character stands on is its physics module's `+0x240` field-ins handle, with `+0x92`

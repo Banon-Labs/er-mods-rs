@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,30 @@ def assert_codes(checker, relative: str, body: str, expected: set[str]) -> None:
     actual = rule_codes(checker, relative, body)
     if actual != expected:
         raise AssertionError(f"{relative}: expected {sorted(expected)}, got {sorted(actual)}")
+
+
+def untracked_file_is_scanned(checker) -> None:
+    """A new file nobody has staged is what the next commit carries, so it is scanned; an ignored
+    one is not. Measured 2026-11-25 on the comment-caps gate, which selected its files the same
+    way: such a file passed a local run and failed CI once committed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        git = ["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["init", "-q"], check=True, timeout=10)
+        (root / ".gitignore").write_text("ignored.sh\n", encoding="utf-8")
+        (root / "tracked.sh").write_text("#!/usr/bin/env bash\necho ok\n", encoding="utf-8")
+        subprocess.run(git + ["add", ".gitignore", "tracked.sh"], check=True, timeout=10)
+        (root / "untracked.sh").write_text("#!/usr/bin/env bash\nsleep 1\n", encoding="utf-8")
+        (root / "ignored.sh").write_text("#!/usr/bin/env bash\nsleep 1\n", encoding="utf-8")
+        files = checker.source_files(root)
+        names = sorted(path.name for path in files)
+        if names != ["tracked.sh", "untracked.sh"]:
+            raise AssertionError(f"untracked/ignored selection: got {names}")
+        findings = {
+            (str(finding.path), finding.rule.code) for path in files for finding in checker.scan_file(path, root)
+        }
+        if findings != {("untracked.sh", "shell-sleep-command")}:
+            raise AssertionError(f"untracked file findings: got {sorted(findings)}")
 
 
 def main() -> int:
@@ -88,6 +114,8 @@ def main() -> int:
     ]
     for relative, body, expected in cases:
         assert_codes(checker, relative, body, expected)
+
+    untracked_file_is_scanned(checker)
 
     print("no-timeouts scanner regression tests passed")
     return 0

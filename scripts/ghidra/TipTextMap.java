@@ -1,4 +1,4 @@
-// TipTextMap.java -- pass 1 of loading-screen tip-text pipeline RE (bd er-effects-rs-jsm).
+// TipTextMap.java -- pass 1 of loading-screen tip-text pipeline RE.
 // Decompiles CS::LoadingScreen::Update (dump 0x14090a7a0) and CSNowLoadingHelperImp::Update
 // (dump 0x1402a2c40), scans function names for loading/tip-related classes, and byte-searches
 // memory for the NowLoading movie/tip identifiers so we can find the SetText/Invoke path.

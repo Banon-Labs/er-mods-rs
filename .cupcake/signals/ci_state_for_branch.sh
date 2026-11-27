@@ -8,8 +8,8 @@
 #
 # Why this exists
 #
-# 2026-09-03: an answer described PR #384 as "pushed, green, and now carries the retraction" while
-# `gh pr checks 384` reported `check  pending`. The word came from a local `scripts/check.sh` run
+# 2026-09-03: an answer described a pull request as "pushed, green, and now carries the retraction"
+# while `gh pr checks` reported `check  pending`. The word came from a local `scripts/check.sh` run
 # that had exited 0 minutes earlier, and it silently became a claim about CI. The user reads "green"
 # as "safe to merge", which is exactly the decision it is not safe to make from a local gate: local
 # check.sh and GitHub CI are different job sets, and a push can be seconds old with nothing having

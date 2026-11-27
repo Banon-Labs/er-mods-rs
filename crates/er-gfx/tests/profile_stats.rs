@@ -147,8 +147,8 @@ fn stats_panel_of_vanilla_matches_generated_fingerprint() {
 }
 
 /// Structural gates on the edited movie: the face box stays placed (so the
-/// native row-populate can resolve/release it -- unplacing it crashes,
-/// er-effects-rs-7e7) but is hidden by an alpha-0 color transform, and the row
+/// native row-populate can resolve/release it -- unplacing it crashes)
+/// but is hidden by an alpha-0 color transform, and the row
 /// template places a `DefineEditText` char as [`STATS_FIELD_NAME`] (the exact
 /// child the DLL resolves for its native SetText push).
 #[test]

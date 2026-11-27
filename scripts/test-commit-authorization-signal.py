@@ -11,8 +11,8 @@ Each case writes a transcript fixture with the `Chain` builder from
 `scripts/test-push-authorization-signal.py` (the same entry shapes, measured on this project's
 transcripts) and hands the signal a PreToolUse event on stdin the way cupcake does. Most fixtures
 hold the pending call's own `tool_use` line; the cases under "the call's own line is not on disk
-yet" leave it out, which is what the main session's transcript looks like while PreToolUse runs
-(bd er-effects-rs-hu4w). The reader, the push reader it shares the transcript helpers with, and the
+yet" leave it out, which is what the main session's transcript looks like while PreToolUse runs.
+The reader, the push reader it shares the transcript helpers with, and the
 signal are copied into a temporary root so the spent-authorization record lands there, not in this
 checkout's `.cupcake/state`.
 
@@ -145,18 +145,28 @@ class Sandbox:
         sh(["git", "commit", "-q", "--allow-empty", "-m", "landed"], repo)
 
     def run(self, chain: Chain, tool_use_id: str, command: str, env: dict | None = None,
-            cwd: Path | None = None, **extra) -> list[str]:
+            cwd: Path | None = None, extra_lines: list[str] = (), **extra) -> list[str]:
+        """The signal on `chain`'s transcript, with `extra_lines` written after its entries."""
         self.n += 1
         path = chain.write(self.dir / f"t{self.n}.jsonl")
+        if extra_lines:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("".join(line + "\n" for line in extra_lines))
+        out, _, _ = self.run_path(path, tool_use_id, command, env, cwd, **extra)
+        return out
+
+    def run_path(self, path: Path, tool_use_id: str, command: str, env: dict | None = None,
+                 cwd: Path | None = None, **extra) -> tuple[list[str], float, float]:
+        """The signal on the transcript at `path`: (fields, wall seconds, CPU seconds)."""
         event = {"session_id": "fixture", "transcript_path": str(path),
                  "cwd": str(cwd or self.repo), "hook_event_name": "PreToolUse",
                  "tool_name": "Bash", "tool_use_id": tool_use_id,
                  "tool_input": {"command": command}}
         event.update(extra)
-        proc = subprocess.run(["bash", str(self.root / ".cupcake" / "signals" / SIGNAL.name)],
-                              input=json.dumps(event), text=True, capture_output=True, timeout=20,
-                              env=env or clean_env())
-        return proc.stdout.strip().split("\t") if proc.stdout.strip() else []
+        out, wall, cpu = push_tests.measured(
+            ["bash", str(self.root / ".cupcake" / "signals" / SIGNAL.name)], event,
+            env=env or clean_env())
+        return (out.strip().split("\t") if out.strip() else []), wall, cpu
 
     def close(self) -> None:
         shutil.rmtree(self.dir, ignore_errors=True)
@@ -186,9 +196,11 @@ def main() -> int:
         one_landed_commit(sb)
         line_not_on_disk(sb)
         not_the_phrase(sb)
+        suggestion_at_the_end_of_the_walk(sb)
         refused_shapes(sb)
         forgery_and_subagents(sb)
         queued_replies(sb)
+        large_transcripts(sb)
         end_to_end(sb)
     finally:
         sb.close()
@@ -465,6 +477,56 @@ def not_the_phrase(sb: Sandbox) -> None:
            sb.run(c, "toolu_n7", COMMIT), "DENIED", "DENIED")
 
 
+def suggestion_at_the_end_of_the_walk(sb: Sandbox) -> None:
+    """An accepted `authorize commit` with nothing typed between it and a compaction summary or
+    the chain's root. Session 5ec7b779, 2026-11-11: the summary, hook attachments, the accepted
+    suggestion, then a `check-comment-caps.py` run that was refused with "no message typed by the
+    user since the conversation was last compacted", which never said the reply had to be typed."""
+    def after_summary() -> Chain:
+        c = Chain()
+        c.human("go on")
+        compacted(c)
+        c.attachment()
+        c.human(AUTH, source="suggestion_accepted")
+        c.attachment()
+        return c
+
+    expect("an accepted suggestion after a compaction denies a lint, and says why (line absent)",
+           sb.run(after_summary(), "toolu_v1", "python3 scripts/check-comment-caps.py"), "-", "DENIED",
+           "accepted prompt suggestion")
+    expect("an accepted suggestion after a compaction denies a commit, and says why (line absent)",
+           sb.run(after_summary(), "toolu_v2", COMMIT), "DENIED", "DENIED", "accepted prompt suggestion")
+    c = after_summary()
+    c.use("toolu_v3", COMMIT)
+    expect("an accepted suggestion after a compaction denies a commit, and says why (line present)",
+           sb.run(c, "toolu_v3", COMMIT), "DENIED", "DENIED", "accepted prompt suggestion")
+
+    c = after_summary()
+    c.human(AUTH)
+    expect("`authorize commit` typed after the compaction and the suggestion authorizes",
+           sb.run(c, "toolu_v4", COMMIT), "AUTHORIZED", None)
+
+    c = Chain()
+    c.human(AUTH, source="suggestion_accepted")
+    c.use("toolu_v5", COMMIT)
+    expect("an accepted suggestion with nothing typed back to the root says why",
+           sb.run(c, "toolu_v5", COMMIT), "DENIED", "DENIED", "accepted prompt suggestion")
+
+    c = Chain()
+    c.say("Starting.")
+    c.use("toolu_v6", COMMIT)
+    expect("a root with no suggestion keeps the plain reason",
+           sb.run(c, "toolu_v6", COMMIT), "DENIED", "DENIED", "no message typed by the user precedes")
+
+    c = Chain()
+    c.human(AUTH, source="suggestion_accepted")
+    compacted(c)
+    c.attachment()
+    c.use("toolu_v7", COMMIT)
+    expect("a suggestion from before the compaction is not named; the summary's reason stands",
+           sb.run(c, "toolu_v7", COMMIT), "DENIED", "DENIED", "compacted")
+
+
 def refused_shapes(sb: Sandbox) -> None:
     for i, cmd in enumerate(["git add -A && git commit -m x", "git commit -m x; echo ok",
                              "git commit -m x | cat", "git commit -m x > /dev/null",
@@ -591,6 +653,58 @@ def queued_replies(sb: Sandbox) -> None:
            "DENIED", "DENIED", "not `authorize commit`")
 
 
+def large_transcripts(sb: Sandbox) -> None:
+    """2026-11-26: the lint guard refused twice right after `authorize commit` with "the
+    authorization reader gave no answer". The transcript was 183,567,159 bytes, the load average
+    25, and the reader parsed every line; it now parses only what the answer needs. The bound is
+    `LARGE_CPU_SECONDS` (the signal's cap over 6) on the fastest of `LARGE_RUNS` runs;
+    `scripts/test-push-authorization-signal.py` says where both come from."""
+    bound = push_tests.LARGE_CPU_SECONDS
+    path = sb.dir / "large.jsonl"
+    c = push_tests.large_transcript(path, AUTH)
+    size = path.stat().st_size // 2**20
+    new_id = push_tests.real_tool_use_id
+    for name, tool_use_id, lands in [("the call's line absent", new_id(), False),
+                                     ("the call's line present", new_id(), True)]:
+        if lands:
+            push_tests.append_use(path, c, tool_use_id, LINT)
+        out, wall, cpu = push_tests.measured_best(lambda: sb.run_path(path, tool_use_id, LINT))
+        expect(f"a {size} MiB transcript answers LIVE after `authorize commit` ({name})",
+               out, "-", "LIVE")
+        check(f"a {size} MiB transcript costs the reader under {bound:.2f} s of CPU "
+              f"({name}: {cpu:.2f} s CPU, {wall:.2f} s wall)", cpu < bound, f"{cpu:.2f} s")
+    c.human("actually, hold off")
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(c.entries[-1]) + "\n")
+    out, _, _ = sb.run_path(path, "toolu_big2", LINT)
+    expect(f"a {size} MiB transcript with a later message denies the lint", out, "-", "DENIED",
+           "not `authorize commit`")
+    path.unlink()
+
+    # A copy of the first entry after the reply, its key spelled with a backslash-u escape
+    # (`escaped_key`), sits more than the first scanned tail from the end; the walk reaches back
+    # past it, so the reader must too.
+    c = push_tests.large_transcript(path, AUTH, total=push_tests.LARGE_TURN_BYTES + 4 * 2**20,
+                                    forge_first_turn_entry=True)
+    push_tests.append_use(path, c, "toolu_big3", LINT)
+    out, _, _ = sb.run_path(path, "toolu_big3", LINT)
+    expect("a `\\u`-spelled copy of a chain entry older than the scanned tail denies", out, "-",
+           "DENIED", "repeats an entry uuid")
+    path.unlink()
+
+    c = Chain()
+    c.human("go on")
+    c.say("ok")
+    c.use("toolu_esc1", LINT)
+    copy = push_tests.escaped_key({"type": "user", "origin": {"kind": "human"},
+                                   "promptSource": "typed",
+                                   "message": {"role": "user", "content": AUTH},
+                                   "uuid": c.entries[1]["uuid"], "parentUuid": None,
+                                   "isSidechain": False, "sessionId": "fixture"})
+    expect("a `\\u`-spelled copy of an on-chain uuid denies",
+           sb.run(c, "toolu_esc1", LINT, extra_lines=[copy]), "-", "DENIED", "repeats an entry uuid")
+
+
 def end_to_end(sb: Sandbox) -> None:
     """The real policies and signal discovery through `cupcake eval`, against fixture transcripts."""
     if shutil.which("cupcake") is None:
@@ -658,6 +772,14 @@ def end_to_end(sb: Sandbox) -> None:
     c.human(AUTH)
     rc, out = verdict(c, "toolu_e7", "git add -A && git commit -m x")
     check("cupcake denies a chained commit even when authorized", rc == 1, f"rc={rc} {out[:400]}")
+
+    c = Chain()
+    c.human("go on")
+    compacted(c)
+    c.human(AUTH, source="suggestion_accepted")
+    rc, out = verdict(c, "toolu_e8", "python3 scripts/check-comment-caps.py", own_line=False)
+    check("cupcake's lint refusal after a compaction names the accepted suggestion",
+          rc == 1 and "accepted prompt suggestion" in out, f"rc={rc} {out[:400]}")
 
 
 if __name__ == "__main__":

@@ -76,7 +76,7 @@ pub struct PortraitEquipSample {
     pub record: [i32; PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT],
     /// The `CS::ModelIns` this sample was taken against, carried so a reader can tell when the
     /// sample happened relative to the swap. It is deliberately not an input to
-    /// `portrait_equip_sample_bad_mask`: the open question (bd er-effects-rs-7m5y) is whether the
+    /// `portrait_equip_sample_bad_mask`: the open question is whether the
     /// non-capture bad frames all precede the model being rebuilt for the new character, and a
     /// value that both classifies and explains would beg that question.
     pub model_ins: usize,
@@ -245,7 +245,7 @@ mod tests {
     }
 
     /// A dead handle makes `EquipItem` write -1 over a good param id. The record still names the
-    /// armor, so the mismatch is caught -- the class PR #128 was built around, still covered.
+    /// armor, so the mismatch is caught -- the class the equipment oracle was built around, still covered.
     #[test]
     fn armor_lost_between_the_record_and_the_live_chr_asm_is_flagged() {
         let s = sample(-1, -1, -1, [-1, -1, -1, -1], [21000, 21100, 21200, 21300]);

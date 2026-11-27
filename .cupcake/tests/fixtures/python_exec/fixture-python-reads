@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Fixture for bash_no_python_file_write: a python program on PATH that only reads, which the
+guard admits by name once the `python_script_writes` signal has read it."""
+import sys
+
+print(len(sys.argv))

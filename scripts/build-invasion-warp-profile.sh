@@ -6,7 +6,7 @@
 # `crates/er-quickload`, so the documented `cargo xwin build --release` does not build this
 # DLL either. Before this script the only way to obtain a loadable artifact was an ad-hoc
 # `-p` invocation, and no profile in the repo referenced it -- so a green gate could coexist
-# with a DLL that does not link and cannot be loaded (bd er-effects-rs-5es review).
+# with a DLL that does not link and cannot be loaded.
 #
 # The invasion-warp shell owns no Present detour and no MinHook instance, so unlike
 # `er_loading_portrait.dll` it is safe alongside the product DLL in one profile. That

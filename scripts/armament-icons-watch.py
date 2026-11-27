@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Semaphore-progress watcher for the armament-icons badge smoke (bd er-effects-rs-pe98).
+"""Semaphore-progress watcher for the armament-icons badge smoke.
 
 Owns the timed poll loop and teardown so the shell runner needs no `sleep`
 (scripts/check-no-timeouts.py bans shell sleeps; Python time.sleep is fine, the

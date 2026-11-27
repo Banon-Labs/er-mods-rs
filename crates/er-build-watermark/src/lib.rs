@@ -82,7 +82,7 @@ pub unsafe extern "system" fn DllMain(
                     // shell logging `first render display_width=3840 rows=14` while
                     // `er-net-effects` sat at `hudhook_render_count = 0` -- installed, never
                     // rendered, no error logged anywhere -- and their interactive bar had been
-                    // invisible since #336 added this shell. Two `Hudhook::apply()` calls in one
+                    // invisible since this shell was added. Two `Hudhook::apply()` calls in one
                     // process really do double-hook `Present`, and the second one loses.
                     //
                     // Neither the sleep nor the eager claim is needed now: `overlay_host` makes

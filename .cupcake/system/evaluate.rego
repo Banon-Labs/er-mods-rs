@@ -32,6 +32,7 @@ evaluate := {
 all_halts contains decision if some decision in data.cupcake.policies.builtins.git_pre_check.halt
 all_halts contains decision if some decision in data.cupcake.policies.builtins.protected_paths.halt
 all_halts contains decision if some decision in data.cupcake.policies.builtins.rulebook_security_guardrails.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.correction_encoded_first.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.guard_layer_destructive_guard.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.idle_hold.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.native_ownership_vocab_reminder.halt
@@ -43,17 +44,23 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.no_
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_described_next_step.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_diagnosis_without_fix.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_explanation_instead_of_correction.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_filed_not_started.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_fix_claim_without_runtime_evidence.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_future_tense_commitment.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_inline_user_command.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_markdown_rule.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_mergeable_without_green_ci.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_narrated_action.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_negated_opener.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_proof_without_observation.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_restating_user_own_rule.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_stall_on_friction.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_unclosed_finished_agents.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexplained_running_tasks.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_unmeasured_estimate.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_untailed_agent.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_untailed_long_run.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unwatched_red_stage.halt
 
@@ -70,6 +77,7 @@ all_denials contains decision if some decision in data.cupcake.policies.builtins
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_color_spelling_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_comment_caps_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_tmp_scripts_guard.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_tracker_refs_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.gh_pr_title_conventional.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_any_push.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_detached_push.deny
@@ -85,7 +93,10 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.n
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_product_work_before_tool_fix.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_stop_waiting_agent.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_subagent_monitor.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_whole_check_sh.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.rego_must_compile.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_jobs_er_builds_pvp.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_scoped_cargo.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny
@@ -98,9 +109,11 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.t
 # Prompt-context decisions.
 all_add_context contains decision if some decision in data.cupcake.policies.claude.block_askuserquestion_reminder.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.builtins.claude_code_always_inject_on_prompt.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.correction_encoded_first_reminder.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.claude.idle_hold_reminder.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.claude.native_ownership_vocab_reminder.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.claude.no_authority_agreement_reminder.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.claude.no_false_ci_green.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.no_repo_network_banners_prompt_context.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.session_tasks_context.add_context
 all_add_context contains decision if some decision in data.cupcake.policies.claude.wall_of_text.add_context

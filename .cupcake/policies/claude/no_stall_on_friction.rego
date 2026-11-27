@@ -130,11 +130,11 @@ handed_back if {
 # triggering action turns the same sentence from a deflection into an account.
 #
 # The second way out is local: every blame phrase is preceded, in its own sentence or the one before
-# it, by a first-person cause (bd er-effects-rs-454a). "My brief told the agent to keep scripts in
-# the scratchpad. The guard refused that as designed" already names the agent's hand before the
-# mechanism acts, and was being halted because none of the turn-global ownership shapes matched it.
-# A bare "The guard refused it." has no such cause and still halts. A signal without `blamectx` (an
-# older or degraded one) yields one empty context, which is unowned, so it fails closed.
+# it, by a first-person cause. "My brief told the agent to keep scripts in the scratchpad. The guard
+# refused that as designed" already names the agent's hand before the mechanism acts, and was being
+# halted because none of the turn-global ownership shapes matched it. A bare "The guard refused it."
+# has no such cause and still halts. A signal without `blamectx` (an older or degraded one) yields
+# one empty context, which is unowned, so it fails closed.
 deflected if {
 	blame != ""
 	owned == "0"

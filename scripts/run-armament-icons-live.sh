@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Armament-icons live user-inspection launch (bd er-effects-rs-pe98 / er-effects-rs-jogu).
+# Armament-icons live user-inspection launch.
 #
 # This is the user-inspection counterpart to run-armament-icons-smoke.sh: it launches the
 # badge DLL through me3 and leaves the game running for the user to drive by hand. Per

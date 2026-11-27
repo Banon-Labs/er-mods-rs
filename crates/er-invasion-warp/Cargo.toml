@@ -1,5 +1,5 @@
-# Thin standalone ME3-loadable shell for the `er-invasion-warp-core` feature crate
-# (bd er-effects-rs-5es): own DllMain, own log file, individually shippable.
+# Thin standalone ME3-loadable shell for the `er-invasion-warp-core` feature crate:
+# own DllMain, own log file, individually shippable.
 #
 # It is designed to COEXIST with the product DLL and the other companions: a profile may list
 # it, omit it, or combine it freely. It installs NO detours at all -- it arms the host seam and

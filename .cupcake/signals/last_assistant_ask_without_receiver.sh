@@ -27,9 +27,13 @@
 #
 # What is exempt, sentence by sentence: an ask whose answer is the user's own typed reply --
 # subjective judgement ("does it look right"), a preference or decision, an approval, a credential
-# or sudo, something to paste, what the user sees when no oracle covers it, or when they want
-# something. Those need no instrument. A question with none of the ask phrases
-# ("Does the font look right to you?") never matches in the first place.
+# or sudo, something to paste, what the user sees when no oracle covers it, when they want
+# something, or what they know or can perceive ("can you tell X apart from Y", "can you tell
+# whether ...", "can you distinguish ..."). Those need no instrument. A question with none of the ask phrases
+# ("Does the font look right to you?") never matches in the first place. Also exempt: "I need its
+# <output>" on a line that names a background task still running, with no "you" in the sentence --
+# the agent naming what it awaits from its own task, whose finished notification is the receiver
+# (see TASK_OUTPUT_NEED_RE).
 #
 # Only the closing prose run is scanned; quoted, backticked and fenced spans are stripped so quoting
 # the rule cannot trip it.
@@ -60,10 +64,20 @@ if turn is None or not turn.text_runs:
     sys.exit(0)
 closing = turn.text_runs[-1]
 
+# Background tasks still running as the turn ends, matched as whole tokens. See TASK_OUTPUT_NEED_RE.
+_running_ids = sorted({t.task_id for t in scan.running_background_tasks(events) if t.task_id},
+                      key=len, reverse=True)
+RUNNING_ID_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:" + "|".join(map(re.escape, _running_ids)) + r")(?![A-Za-z0-9_-])"
+) if _running_ids else None
+
 # --- the ask -----------------------------------------------------------------------------------
 
 def scrub(text):
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    if RUNNING_ID_RE is not None:
+        # "(task `b2mrgwhrl`)" names the task as surely as the bare id does; keep the id itself.
+        text = re.sub(r"`(" + RUNNING_ID_RE.pattern + r")`", r"\1", text)
     text = re.sub(r"`[^`\n]*`", " ", text)
     text = re.sub(r'"[^"\n]*"', " ", text)
     text = re.sub(r"[“][^”\n]*[”]", " ", text)
@@ -86,11 +100,20 @@ _SIMPLE_PAST = (
 
 ASK_RE = re.compile(
     r"\bneed\s+you\s+to\b"
+    # "First I need the game's point-light creation API." (2026-11-10 replay) still matches here, on
+    # purpose. Its words are those of "I need the game's title screen" and "I need a fresh session":
+    # only what the noun names says whether the agent fetches it or the user causes it, and no rule
+    # here reads that. That halt was also never real: the sentence was the preamble to a tool call
+    # the user rejected, and transcript 26d7bb3b holds no stop_hook_summary for that turn.
     r"|\bi(?:'d|\s+would|\s+still)?\s+need\s+(?!to\b|nothing\b|no\b|not\b)\w+"
     r"|\bwhat\s+i\s+need\b"
-    r"|\bplease\s+\w+"
+    # Not inside a hyphenated word: on 2026-11-10 "Main is pulled (..., a release-please changelog
+    # bump)." halted a report on the release-please tool's name.
+    r"|(?<![\w-])please\s+\w+"
     r"|\b(?:let|tell|ping|show)\s+me\s+(?:know\s+)?(?:when|once|after|as\s+soon\s+as|whether\s+it|if\s+it)\b"
-    r"|\bwaiting\s+(?:on|for)\s+you\b"
+    # Not straight after a negation: on 2026-11-10 "I wasn't waiting for you to run it." halted a
+    # turn that said the opposite of an ask.
+    r"|(?<!\bnot\s)(?<!n't\s)\bwaiting\s+(?:on|for)\s+you\b"
     # A temporal "you" clause is an ask only where it leads a sentence or clause ("Once you open
     # it, the probe records ...") or trails a first-person main clause ("I'll read the log when
     # you finish"). Mid-sentence it is usually the generic player of a game mechanic: on
@@ -158,10 +181,127 @@ TYPED_REPLY_ASK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The same ask with a pronoun for the reply: on 2026-11-10 the replay of transcript 9538a842
+# (boundary 102) halted on "Formatting and committing both wait for your reply, and each reply pays
+# for one commit, so I need it twice, once per branch:", whose next line was `authorize commit`.
+# "It" stands for the reply only when the closing message hands `authorize commit` or `authorize
+# <hex sha>` on a line of its own (HANDED_REPLY_LINE_RE), this sentence or the one before names the
+# reply in TYPED_REPLY_ASK_RE's nouns (REPLY_NOUN_RE), and nothing but a clause boundary or a count
+# follows the pronoun. Blanked like TYPED_REPLY_ASK_RE, so an action ask riding along is still seen.
+# "I need it" with no such line, "I need it open", "I need the game open" and "I need you to run X"
+# stay asks. HANDED_REPLY_LINE_RE lives in cupcake_turn_scan, where the idle-hold signal reads the same
+# line as waiting on the user.
+HANDED_REPLY_LINE_RE = scan.HANDED_REPLY_LINE_RE
+REPLY_NOUN_RE = re.compile(
+    r"\b(?:reply|replies|answer|phrase|go-ahead|authori[sz]ation)\b", re.IGNORECASE
+)
+REPLY_PRONOUN_NEED_RE = re.compile(
+    r"\bi(?:'d|\s+would|\s+still)?\s+need\s+(?:it|them|both)\b"
+    r"(?=\s*(?:[,.;:!?)–—]|$|(?:twice|once|again|first|both|each|per|too|now)\b"
+    r"|(?:\d+|one|two|three|four)\s+(?:more\s+)?times?\b))",
+    re.IGNORECASE,
+)
+HANDS_REPLY_PHRASE = HANDED_REPLY_LINE_RE.search(closing) is not None
+
+# A clause-leading temporal "you" clause whose verb is a step of reasoning, not an act ("once you
+# count", "once you factor in", "when you compare"), followed by a main clause that states a fact
+# about its own subject ("three spells are strictly worse ..."), is the generic "you" of an
+# argument: nobody is asked to count anything. On 2026-11-10 "Once you count what each one costs a
+# real melee build, three spells are strictly worse than an ash that does the same job, and a
+# fourth is on a Faith build." halted a finished report. The clause is blanked, so any other ask in
+# the sentence ("..., please reload") is still seen, and only when the sentence names no first
+# person and no instrument: "once you count the hits, tell me" and "once you compare them, the log
+# shows it" stay asks. An acting verb ("once you open the inventory, the cadence shows up") is
+# never blanked.
+_REASONING_VERB = (
+    r"(?:count(?:s|ed|ing)?|consider(?:s|ed|ing)?|factor(?:s|ed|ing)?|account(?:s|ed|ing)?"
+    r"|compar(?:e|es|ed|ing)|weigh(?:s|ed|ing)?|includ(?:e|es|ed|ing)|add(?:s|ed|ing)?"
+    r"|subtract(?:s|ed|ing)?|discount(?:s|ed|ing)?|normali[sz](?:e|es|ed|ing)|total(?:s|ed|ing)?"
+    r"|look(?:s|ed|ing)?\s+at|t(?:ake|akes|aken|ook)\s+[^,;.!?]*?\binto\s+account)"
+)
+GENERIC_YOU_RE = re.compile(
+    r"(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
+    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'ve|\s+have)?\s+" + _REASONING_VERB
+    + r"\b[^,;.!?]*,\s*"
+    r"(?=(?:the|a|an|this|that|these|those|its?|their|each|every|any|all|both|no|none|only|most"
+    r"|some|such|there|they|one|two|three|four|five|six|seven|eight|nine|ten|\d+|(?-i:[A-Z])\w*)\b)",
+    re.IGNORECASE,
+)
+# A clause-leading "when you <present verb>," whose main clause opens on the game or a game system and
+# a third-person present verb ("the game sends", "Seamless puts") states how the game behaves for any
+# player: on 2026-11-10 "When you summon, the game sends peers just the three Moongrum IDs from ..."
+# halted a finished report. Blanked, like GENERIC_YOU_RE, only when the sentence names no first
+# person and no instrument, so "when you summon, tell me", "when you summon, I'll read the log" and
+# "when you summon, the probe records it" stay asks, and any other ask in the sentence (", so please
+# reload") is still seen. Only "when": "once you summon" and "as soon as you summon" wait for the
+# user and stay asks, and so do "when you've summoned" and any subject that is not the game's.
+GAME_MECHANIC_YOU_RE = re.compile(
+    r"(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
+    r"when\s+you\s+(?!are\b|have\b)\w+\b[^,;.!?]*,\s*"
+    r"(?=(?:the\s+(?:game|engine|server)|seamless|steam|elden\s+ring)\s+"
+    r"(?:(?:only|still|also|just|then|always|never)\s+)?\w+s\b)",
+    re.IGNORECASE,
+)
+# "Can you tell X apart from Y", "can you tell whether ...", "can you distinguish ..." ask what the
+# user knows or can perceive, and their typed reply is the answer: no event is awaited. On 2026-11-10
+# "Before a Glintstone Cometshard's bolt leaves the staff, can you tell it apart from a Comet, Shard
+# Spiral or Night Comet, and a tap from a charge?" halted on the bare "can you <verb>" ask. Only the
+# ask is blanked, so another ask in the same sentence (", and please reload") is still seen. "Can you
+# tell me when it appears" asks for a report of a future event and stays an ask, and so does "can
+# you tell the host to rehost": "tell" followed by me/us, or by "to" before the "apart"/"from", is
+# not this form.
+KNOWLEDGE_QUESTION_RE = re.compile(
+    r"\b(?:can|could)\s+you\s+(?:(?:\w+ly|still|even|ever|always|already)\s+)?"
+    r"(?:tell\s+(?!me\b|us\b)(?=(?:(?!\bto\b)[^.!?])*?\b(?:apart|from)\b)"
+    r"|tell\s+(?:whether|if|which|the\s+difference)\b"
+    r"|(?:distinguish|differentiate|discern)\b(?!\s+(?:me|us)\b))",
+    re.IGNORECASE,
+)
+FIRST_PERSON_OR_INSTRUMENT_RE = re.compile(
+    r"\b(?:i|i'll|i'm|i'd|i've|me|my|we|we'll|we're|us|our|probe|log|logs|scan|trace|tracer"
+    r"|monitor|watcher|hook|oracle|frida|telemetry)\b",
+    re.IGNORECASE,
+)
+
+# "I need its numbers" on a line that names a background task still running states what the agent
+# awaits from that task, not something it asks of the user: the task's own finished notification
+# wakes the agent. On 2026-11-10 "- **r8 full run** (task b2mrgwhrl): 850 of 1,276 attacks done. I
+# need its numbers to recheck the four control pairs ..." halted a status report, with b2mrgwhrl a
+# backgrounded Bash still running. The need is blanked only when its object opens with its/their,
+# the line names a task that is still running, and the sentence has no second person anywhere, so
+# any other ask in it is still seen. "I need you to", "I need your log", "I need its numbers from
+# you", "I need the game open" and "I need the item list closed" stay asks, on a task line or off
+# one: the game and the item list are not the task's, and a running watcher's exit is not the
+# user's press.
+TASK_OUTPUT_NEED_RE = re.compile(
+    r"\b(?:what\s+)?i(?:'d|\s+would|\s+still)?\s+need(?:\s+(?:is|are))?\s+(?:its|their)\b",
+    re.IGNORECASE,
+)
+SECOND_PERSON_RE = re.compile(r"\b(?:you|your|yours|yourself|yourselves)\b", re.IGNORECASE)
+
+
+def sentences(text):
+    """(sentence, whether its line names a running background task) for each sentence."""
+    for line in text.split("\n"):
+        on_task_line = RUNNING_ID_RE is not None and RUNNING_ID_RE.search(line) is not None
+        for sentence in re.split(r"(?<=[.!?])\s+", line):
+            yield sentence, on_task_line
+
+
 offending = None
-for sentence in re.split(r"(?<=[.!?])\s+|\n+", TABLE_ROW_RE.sub(" ", scrub(closing))):
-    s = RULE_CONDITIONAL_RE.sub(" ", sentence)
+previous = ""
+for sentence, on_task_line in sentences(TABLE_ROW_RE.sub(" ", scrub(closing))):
+    s = KNOWLEDGE_QUESTION_RE.sub(" ", RULE_CONDITIONAL_RE.sub(" ", sentence))
     s = TYPED_REPLY_ASK_RE.sub(" ", s).strip()
+    if HANDS_REPLY_PHRASE and REPLY_NOUN_RE.search(previous + " " + sentence):
+        s = REPLY_PRONOUN_NEED_RE.sub(" ", s).strip()
+    if sentence.strip():
+        previous = sentence
+    if not FIRST_PERSON_OR_INSTRUMENT_RE.search(s):
+        s = GENERIC_YOU_RE.sub(" ", s).strip()
+        s = GAME_MECHANIC_YOU_RE.sub(" ", s).strip()
+    if on_task_line and not SECOND_PERSON_RE.search(sentence):
+        s = TASK_OUTPUT_NEED_RE.sub(" ", s).strip()
     if not s or not ASK_RE.search(s):
         continue
     if EXEMPT_RE.search(s):

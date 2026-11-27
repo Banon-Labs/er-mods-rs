@@ -1168,7 +1168,7 @@ impl ThreadSample {
 /// happened -- a watchdog you have to enable in advance is a watchdog that is off on the run
 /// that needed it. Baselined in `scripts/thread-suspension.baseline.json` instead.
 ///
-/// What bounds the risk described in `er-effects-rs-1742`: the watchdog thread sleeps 5s before
+/// What bounds the risk of a wedged boot: the watchdog thread sleeps 5s before
 /// it looks at anything, refuses to arm until it has watched the frame counter advance, and then
 /// suspends only after a detector has already fired -- a stall means 30s with no frame at all, by
 /// which point hook installation finished long ago. One thread is suspended at a time, nothing is

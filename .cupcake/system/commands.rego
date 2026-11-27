@@ -85,25 +85,25 @@ path_prefix_pattern := `([^ \t;&|()'"]*/)?`
 # has_command_verb answers "is this word the program a shell would run", which
 # command_position_prefix_pattern alone gets right for a BARE verb (`rm -rf x`)
 # but not for one invoked by absolute or relative PATH (`/bin/rm -rf x`,
-# `./rm -rf x`) -- measured 2026-08-31 (bd er-effects-rs-5z75): a leading path
-# component is none of the anchor's separator characters, and the character
-# immediately before the verb is `/`, so the anchor never lined up and
-# `/bin/rm -rf .cupcake` / `/usr/bin/rm -rf .cupcake` were allowed outright by
-# every guard that reads this function. NOT a regression: has_verb's
-# `(^|\s)verb(\s|$)` boundary missed it identically, so this predates both the
-# command-position work and the segmentation work that came before it -- it was
-# simply never covered. Splicing path_prefix_pattern in between the
-# command-position prefix and the verb closes it: the prefix must still resolve
-# back to a real anchor (string start, a separator, or consumed wrapper words),
-# so a slash deep inside an unrelated operand still cannot manufacture a match
-# (see commands_test.rego for the negative cases this reasoning predicts).
+# `./rm -rf x`) -- measured 2026-08-31: a leading path component is none of the
+# anchor's separator characters, and the character immediately before the verb
+# is `/`, so the anchor never lined up and `/bin/rm -rf .cupcake` /
+# `/usr/bin/rm -rf .cupcake` were allowed outright by every guard that reads
+# this function. NOT a regression: has_verb's `(^|\s)verb(\s|$)` boundary missed
+# it identically, so this predates both the command-position work and the
+# segmentation work that came before it -- it was simply never covered. Splicing
+# path_prefix_pattern in between the command-position prefix and the verb closes
+# it: the prefix must still resolve back to a real anchor (string start, a
+# separator, or consumed wrapper words), so a slash deep inside an unrelated
+# operand still cannot manufacture a match (see commands_test.rego for the
+# negative cases this reasoning predicts).
 has_command_verb(command, verb) if {
 	pattern := concat("", [command_position_prefix_pattern, path_prefix_pattern, verb, `([ \t\n;&|(){}]|$)`])
 	regex.match(pattern, command)
 }
 
 # ---------------------------------------------------------------------------
-# SHELL SEGMENTS (2026-08-31, bd er-effects-rs-c0t9)
+# SHELL SEGMENTS (2026-08-31)
 #
 # Moved here from guard_layer_destructive_guard.rego, which had the only copy.
 # The move is the point: a SECOND segmenter written for the next policy that
@@ -205,7 +205,7 @@ has_output_redirect(command) if {
 }
 
 # ---------------------------------------------------------------------------
-# EXECUTED-TEXT DECOMPOSITION (2026-08-26, bd er-effects-rs-dt2e)
+# EXECUTED-TEXT DECOMPOSITION (2026-08-26)
 #
 # A guard that anchors its command pattern on `(^|[;&|(\n])` is asking about
 # LEXICAL POSITION in the raw command string. That is not the question it means
@@ -317,8 +317,8 @@ odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 # The leading path_prefix_pattern is what admits `/bin/bash`, and it REQUIRES a
 # trailing slash, so a longer word that merely ends in one of these names (`mycsh`,
 # `wifish`) cannot match: the alternation has to consume the token whole from its
-# boundary. Shared with has_command_verb above (2026-08-31, bd er-effects-rs-5z75)
-# rather than re-spelled, so the two cannot drift apart.
+# boundary. Shared with has_command_verb above (2026-08-31) rather than re-spelled,
+# so the two cannot drift apart.
 shell_name_pattern := concat("", [path_prefix_pattern, `(ba|z|k|da|a|fi|c|tc)?sh`])
 
 # A shell wrapper whose program text is the NEXT argument: `bash -c`, `sh -c`,
@@ -461,7 +461,7 @@ opener_line_feeds_a_shell(opener) if {
 # quote that makes the body literal (empty for a bare tag), and the tag. One regex per
 # text, the same one `heredoc_tag` used to run. No copy of the text after the token is
 # taken here: on a long body every copy is linear memory the wasm module never frees
-# within an evaluation, which is how a long command runs it out (bd er-effects-rs-xktj).
+# within an evaluation, which is how a long command runs it out.
 heredoc_opener(after_marker) := opener if {
 	matched := regex.find_all_string_submatch_n(`^-?[ \t]*(["']|\\)?([A-Za-z_][A-Za-z0-9_]*)["']?`, after_marker, 1)
 	m := matched[0]
@@ -822,7 +822,7 @@ unparsed_shell_payload(command) if {
 }
 
 # ---------------------------------------------------------------------------
-# COMMAND SLOT, AS TOKENS (2026-09-22, bd er-effects-rs-ak3q / er-effects-rs-if5l)
+# COMMAND SLOT, AS TOKENS (2026-09-22)
 #
 # `has_command_verb` above answers the same question with a regex, and it is the
 # right tool when the program name is a fixed word. It is the wrong one when the
@@ -901,9 +901,17 @@ command_slot_wrapper("uv")
 # already in `command_position_prefix_pattern` above, and the loop body is where they
 # matter: `for c in ...; do sed -i ... crates/$c/src/config.rs; done` splits into a
 # statement whose first word is `do`, and reading `do` as the program hides the `sed`
-# behind it. That exact loop rewrote four crate sources past the Frida gate on 2026-09-21
-# (bd er-effects-rs-wuij).
+# behind it. That exact loop rewrote four crate sources past the Frida gate on 2026-09-21.
 command_slot_wrapper(word) if word in {"do", "then", "else"}
+
+# The rest of the words the shell reads before a command without running them: the
+# conditions of `if`, `elif`, `while` and `until`, a brace group's `{`, and the negation
+# `!`. Measured 2026-11-19 against `no_whole_check_sh`: `if bash scripts/check.sh; then :;
+# fi`, `while ...`, `until ...`, `elif ...`, `{ bash scripts/check.sh; }` and
+# `! bash scripts/check.sh` each ran the suite and were allowed, because the keyword was
+# read as the program. `require_scoped_cargo`, `cap_parallel_fanout` and
+# `no_lint_before_commit` carried `{` and `!` as local extras for the same reason.
+command_slot_wrapper(word) if word in {"if", "elif", "while", "until", "{", "!"}
 
 # Interpreters stand aside the same way shells do. The program a shell runs for
 # `python3 scripts/er-teardown.py` really is `python3`, but the thing every guard
@@ -964,6 +972,38 @@ shell_name_chars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456
 
 # `source x` and `. x` run `x` in the current shell.
 command_slot_wrapper(word) if word in {"source", "."}
+
+# PUBLIC. `[NAME, rest]` for a path that opens with a variable and a slash: `$NAME/rest` or
+# `${NAME}/rest`. Undefined for any other path. `bash_no_python_file_write` resolves a script
+# path through it and `edit_no_tmp_scripts_guard` a write target, each against the one literal
+# its command binds NAME to; the binding rules stay with each guard, because one reads words
+# and the other reads simple commands.
+variable_reference(path) := [name, rest] if {
+	startswith(path, "${")
+	close := indexof(path, "}/")
+	close > 2
+	name := substring(path, 2, close - 2)
+	rest := substring(path, close + 2, (count(path) - close) - 2)
+}
+
+variable_reference(path) := [name, rest] if {
+	startswith(path, "$")
+	not startswith(path, "${")
+	slash := indexof(path, "/")
+	slash > 1
+	name := substring(path, 1, slash - 1)
+	rest := substring(path, slash + 1, (count(path) - slash) - 1)
+}
+
+# PUBLIC. A value the shell hands over as written: no expansion, quoting, glob or escape
+# character in it.
+literal_shell_value(value) if {
+	value != ""
+	count([c |
+		some c in ["$", "`", "\\", "'", `"`, "~", "*", "?", "[", "(", ")", "<", ">", "\t", "\n", "\r"]
+		contains(value, c)
+	]) == 0
+}
 
 # PUBLIC. A shell assignment, `NAME=value`: the name is letters, digits and underscores
 # and does not start with a digit. Token arithmetic, not a regex, for the reason in this
@@ -1081,6 +1121,43 @@ command_slot_wrapper_at(words, i) if {
 	shell_earlier_in_command(words, i - 1)
 }
 
+# The value of an option GNU `env` reads from the next word stands aside with the option:
+# `env --help` lists `-a, --argv0=ARG`, `-C, --chdir=DIR` and `-u, --unset=NAME`. Measured
+# 2026-11-11 against `no_whole_check_sh`: `env -C scripts ./check.sh` runs the suite, and
+# was allowed because the directory was read as the program and the script as its operand.
+#
+# Only when `env` is the program the option belongs to: every word between them is an
+# option, an option's value or an assignment, so `env git -C dir x` keeps `x` an operand of
+# `git`. `-S` is left out on purpose; its value is a command line, not a word to step over.
+command_slot_wrapper_at(words, i) if {
+	i > 1
+	words[i - 1] in env_valued_options
+	start := command_slot_start(words, i)
+	some j, word in words
+	j >= start
+	j < i - 1
+	env_program(word)
+	count([k |
+		some k, _ in words
+		k > j
+		k < i - 1
+		not env_own_word(words, k)
+	]) == 0
+}
+
+env_valued_options := {"-a", "--argv0", "-C", "--chdir", "-u", "--unset"}
+
+env_program(word) if {
+	parts := split(word, "/")
+	parts[count(parts) - 1] == "env"
+}
+
+env_own_word(words, k) if startswith(words[k], "-")
+
+env_own_word(words, k) if assignment_word(words[k])
+
+env_own_word(words, k) if words[k - 1] in env_valued_options
+
 # `-o name` and `-O name`, alone or ending a short cluster (`-euo name`), their `+` forms,
 # and the two long options that name a file.
 shell_valued_option(word) if {
@@ -1122,7 +1199,276 @@ word_in_command_slot(words, index) if {
 }
 
 # ---------------------------------------------------------------------------
-# THIS EVENT'S DECOMPOSITION, COMPUTED ONCE (2026-09-22, bd er-effects-rs-xktj)
+# EXEC LAUNCHERS (2026-11-19)
+#
+# Programs that run the command after their own options: `chrt --idle 0 python3 x.py`,
+# `ionice -c 3 x`, `taskset -c 0-3 x`, `timeout 30s x`, `systemd-run --user --scope x`.
+# `word_in_command_slot` knows a short closed set of wrappers and reads every word outside
+# it as the program, so behind any of these the real program was an operand. Measured
+# 2026-11-19 with `opa eval` against `bash_no_python_file_write`: `python3 /tmp/x/patch.py`
+# is denied, and each of these ran the same uncommitted script allowed --
+# `chrt --idle 0 python3 ...`, `ionice -c 3 ...`, `ionice -c idle ...`,
+# `taskset -c 0-3 ...`, `taskset 0x3 ...`, `timeout 30s ...`, `timeout -s KILL 30 ...`,
+# `systemd-run --user --scope ...`, `stdbuf -o L ...`, `time ...`, `/usr/bin/time -v ...`,
+# and `python3 scripts/er-mechanics-resume.py --log l -- python3 ...`. The first was
+# found running in an agent session: a scratch script whose importlib location was not a
+# literal ran because a `chrt --idle 0` stood in front of it.
+#
+# `launched_word_in_command_slot` is `word_in_command_slot` with these followed too. Every
+# guard that asks whether a program it names is the one a statement runs reads it
+# (2026-11-19: `no_whole_check_sh`, `require_scoped_cargo`, `cap_parallel_fanout`,
+# `no_lint_before_commit`, `me3_launch_needs_windows_binaries_dir`,
+# `require_jobs_er_builds_pvp`, `teardown_must_relaunch`, `bash_no_python_file_write`);
+# measured that day, each of the first seven allowed its program behind `chrt --idle 0` or
+# `taskset -c 0-3`. The narrower predicate stays public for the tests that pin it.
+#
+# A launcher word stands aside, and so does each of these after it in its statement:
+#
+#   * the value of one of its options that takes the next word (`ionice -c idle`,
+#     `timeout -s KILL`, `systemd-run -u job`), from each tool's `--help` on this machine
+#     (util-linux chrt/ionice/taskset/flock/prlimit, GNU coreutils timeout/nice/stdbuf,
+#     systemd-run, numactl, strace, sudo; xargs as `cap_parallel_fanout` lists it);
+#   * the first word that is neither an option nor an option's value, for the tools with
+#     one positional before the command: timeout's DURATION (`30s`), chrt's priority,
+#     taskset's mask or list (`0x3`, `0-3`), flock's lock file. chrt's priority is
+#     optional, so `chrt -i python3 x.py` reads `python3` as the priority; that only
+#     marks it a wrapper, and the slot test of the word itself looks at the words BEFORE it.
+#   * everything from a launcher that hands the rest of its line on after `--` up to that
+#     `--`: a python script (`scripts/er-mechanics-resume.py`, `er-weapon-build.py
+#     --supervise`, both `argparse.REMAINDER`), `py-spy`, `perf`, `valgrind`, `ltrace`.
+#     Only up to the first `--`, so the program after it is still read as the program.
+#
+# Residue: `py-spy record python3 x.py` without `--`, `flock l -c "..."` and other
+# launchers not listed here are still read as the program.
+# ---------------------------------------------------------------------------
+
+exec_launcher_valued_options := {
+	"env": {"-a", "--argv0", "-C", "--chdir", "-u", "--unset"},
+	"timeout": {"-s", "--signal", "-k", "--kill-after"},
+	"nice": {"-n", "--adjustment"},
+	"stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+	"chrt": {"-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"},
+	"ionice": {"-c", "--class", "-n", "--classdata"},
+	"taskset": set(),
+	"flock": {"-w", "--timeout", "--wait", "-E", "--conflict-exit-code", "--start", "--length"},
+	"systemd-run": {
+		"-H", "--host", "-M", "--machine", "-C", "--capsule", "-u", "--unit", "-p",
+		"--property", "--description", "--slice", "--expand-environment", "--service-type",
+		"--uid", "--gid", "--nice", "--working-directory", "--root-directory", "-E", "--setenv",
+		"--output", "--json", "--job-mode", "--background", "--path-property",
+		"--socket-property", "--timer-property", "--on-active", "--on-boot", "--on-startup",
+		"--on-unit-active", "--on-unit-inactive", "--on-calendar",
+	},
+	"time": {"-o", "--output", "-f", "--format"},
+	"numactl": {
+		"-i", "--interleave", "-w", "--weighted-interleave", "-p", "--preferred", "-P",
+		"--preferred-many", "-C", "--physcpubind", "-N", "--cpunodebind", "-m", "--membind",
+	},
+	"prlimit": {"-o", "--output"},
+	"strace": {
+		"-e", "-E", "--env", "-u", "--user", "-I", "--interruptible", "-P", "--trace-path",
+		"-a", "--columns", "-o", "--output", "-s", "--string-limit", "-X",
+		"--const-print-style", "-O", "--summary-syscall-overhead", "-S", "--summary-sort-by",
+		"-U", "--summary-columns", "-b",
+	},
+	"sudo": {
+		"-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host",
+		"-p", "--prompt", "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user",
+	},
+	"doas": {"-u", "-C"},
+	"setsid": set(),
+	"nohup": set(),
+	"xargs": {
+		"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "--arg-file", "--delimiter",
+		"--max-args", "--max-chars", "--max-procs", "--process-slot-var",
+	},
+}
+
+exec_launchers_with_positional := {"timeout", "chrt", "taskset", "flock"}
+
+dash_dash_launcher_names := {"py-spy", "perf", "valgrind", "ltrace"}
+
+# The launcher a word names, by itself or as a path (`/usr/bin/time`). A word that opens or
+# closes a quote without being wholly quoted is part of a quoted argument: in
+# `bash x.sh "timeout 3 python3 /tmp/x.py"` the word `"timeout` is text handed to x.sh, and
+# reading it as a launcher put the quoted `python3` in a command slot (measured 2026-11-19).
+exec_launcher_name(word) := name if {
+	parts := split(launcher_spelling(word), "/")
+	name := parts[count(parts) - 1]
+	_ := exec_launcher_valued_options[name]
+}
+
+dash_dash_launcher(word) if {
+	parts := split(launcher_spelling(word), "/")
+	parts[count(parts) - 1] in dash_dash_launcher_names
+}
+
+dash_dash_launcher(word) if endswith(launcher_spelling(word), ".py")
+
+# A leading backslash skips an alias and runs the same program (`\time xargs -P 16 ...`);
+# `cap_parallel_fanout`'s own copy of this test stepped over it before it moved here.
+launcher_spelling(word) := trim_left(word, "\\") if {
+	not contains(word, "\"")
+	not contains(word, "'")
+}
+
+launcher_spelling(word) := substring(word, 1, count(word) - 2) if {
+	count(word) > 2
+	some q in {"\"", "'"}
+	startswith(word, q)
+	endswith(word, q)
+	not contains(substring(word, 1, count(word) - 2), q)
+}
+
+# Every word strictly between the launcher at `j` and `end` is the launcher's own: an option,
+# an assignment (`env A=1`, `sudo A=1`), or the value of the option before it.
+launcher_own_span(words, name, j, end) if {
+	count([k |
+		some k, word in words
+		k > j
+		k < end
+		not launcher_own_word(words, name, k, word)
+	]) == 0
+}
+
+launcher_own_word(_, _, _, word) if startswith(word, "-")
+
+launcher_own_word(_, _, _, word) if assignment_word(word)
+
+launcher_own_word(words, name, k, _) if words[k - 1] in exec_launcher_valued_options[name]
+
+# Cost. These rules run inside the per-event wasm module, whose memory ends the evaluation
+# when it runs out, and an aborted evaluation refuses the call with every guard silent. The
+# first version of this block asked every word of the command about every launcher in it,
+# cubic in the command's length, and a 1.3 KB command (one `bash x.sh "..." "..."` statement
+# whose quoted arguments named `chrt`, `timeout` and `python3` many times) aborted the live
+# hook at its 100MB ceiling (measured 2026-11-19 with `cupcake eval --wasm-max-memory 100MB`
+# on a copy of `.cupcake`, against an unchanged copy that answered). So:
+#
+#   * only the statement's words before the asked-about word are read (`prefix`);
+#   * the launcher, `--` and dash-dash-launcher positions are listed once per question and
+#     handed to the per-word rules, which are only asked about the words that are not
+#     wrappers already (`plain`);
+#   * a word is only ever owned by the NEAREST launcher before it, so each word costs one
+#     span check at most; and
+#   * the first plain word -- the statement's program, as `word_in_command_slot` reads it --
+#     is asked first, and the rest only when a launcher owns it. A python word quoted as an
+#     argument (`bd remember "... python3 x.py"`) fails there, on `bd`.
+#
+# `launchers` and `dd_starts` index `prefix`; `dashes` lists the positions of `--` in it.
+launcher_prefix_word(prefix, _, _, _, i) if exec_launcher_name(prefix[i])
+
+launcher_prefix_word(prefix, launchers, _, _, i) if {
+	i > 1
+	startswith(prefix[i - 1], "-")
+	j := max([l |
+		some l in launchers
+		l < i - 1
+	])
+	name := exec_launcher_name(prefix[j])
+	prefix[i - 1] in exec_launcher_valued_options[name]
+	launcher_own_span(prefix, name, j, i - 1)
+}
+
+launcher_prefix_word(prefix, launchers, _, _, i) if {
+	not startswith(prefix[i], "-")
+	j := max([l |
+		some l in launchers
+		l < i
+	])
+	name := exec_launcher_name(prefix[j])
+	name in exec_launchers_with_positional
+	launcher_own_span(prefix, name, j, i)
+}
+
+# From the nearest dash-dash launcher at or before `i` to the first `--` after it.
+launcher_prefix_word(_, _, dd_starts, dashes, i) if {
+	j := max([s |
+		some s in dd_starts
+		s <= i
+	])
+	max(array.concat([d | some d in dashes; d < i], [-1])) < j
+	max(dashes) >= i
+}
+
+launcher_or_dash_dash(word) if exec_launcher_name(word)
+
+launcher_or_dash_dash(word) if dash_dash_launcher(word)
+
+# PUBLIC. `word_in_command_slot`, with the exec launchers above followed as well.
+launched_word_in_command_slot(words, index) if {
+	start := command_slot_start(words, index)
+	prefix := array.slice(words, start, index)
+	# `prefix` rather than `words`: every rule of `command_slot_wrapper_at` looks back only
+	# within the statement (`command_slot_start`, `words[i - 1]`), and `prefix` is the
+	# statement, so the answers are the same while each `command_slot_start` inside reads
+	# the statement instead of the whole command.
+	#
+	# The statement's first few words are read before all of them: when the first plain word
+	# among them is not a launcher and follows none, the word at `index` is an operand, and the
+	# rest of the statement is never asked about. A statement whose quoted arguments name a
+	# guarded program many times (`bash x.sh "chrt -i 0 bash scripts/check.sh" ...`) asks this
+	# once per mention, and each asking listed every word of it: 40 mentions in 1.5 KB aborted
+	# the 100MB wasm module once seven more guards read this predicate (measured 2026-11-19 with
+	# `cupcake eval --wasm-max-memory 100MB`).
+	lead_plain := [p |
+		some p, _ in array.slice(prefix, 0, launcher_lead_words)
+		not command_slot_wrapper_at(prefix, p)
+	]
+	lead_may_launch(prefix, lead_plain)
+	plain := [p |
+		some p, _ in prefix
+		not command_slot_wrapper_at(prefix, p)
+	]
+	plain_words_stand_aside(prefix, plain)
+}
+
+launcher_lead_words := 8
+
+# Every one of the first words is a wrapper, so the first plain word is further on.
+lead_may_launch(_, lead_plain) if count(lead_plain) == 0
+
+lead_may_launch(prefix, lead_plain) if {
+	count(lead_plain) > 0
+	count([w |
+		some w in array.slice(prefix, 0, min(lead_plain) + 1)
+		launcher_or_dash_dash(w)
+	]) > 0
+}
+
+plain_words_stand_aside(_, plain) if count(plain) == 0
+
+plain_words_stand_aside(prefix, plain) if {
+	count(plain) > 0
+	# The statement's program, as `word_in_command_slot` reads it, is a launcher or follows
+	# one among the wrappers before it. Checked over those few words before anything is listed:
+	# a 1.7 KB `bash x.sh "..." "..."` whose quoted words named launchers aborted the wasm
+	# module here when the lists were built first (measured 2026-11-19).
+	count([w |
+		some w in array.slice(prefix, 0, min(plain) + 1)
+		launcher_or_dash_dash(w)
+	]) > 0
+	launchers := [j |
+		some j, word in prefix
+		exec_launcher_name(word)
+	]
+	dd_starts := [j |
+		some j, word in prefix
+		dash_dash_launcher(word)
+	]
+	dashes := [k |
+		some k, word in prefix
+		word == "--"
+	]
+	launcher_prefix_word(prefix, launchers, dd_starts, dashes, min(plain))
+	count([p |
+		some p in plain
+		not launcher_prefix_word(prefix, launchers, dd_starts, dashes, p)
+	]) == 0
+}
+
+# ---------------------------------------------------------------------------
+# THIS EVENT'S DECOMPOSITION, COMPUTED ONCE (2026-09-22)
 #
 # Nine policies called `executed_texts(input.tool_input.command)` with the same
 # argument, and the compiled wasm module re-ran the decomposition for each one:

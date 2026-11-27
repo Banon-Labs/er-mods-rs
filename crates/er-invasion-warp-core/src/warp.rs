@@ -303,7 +303,7 @@ static INVASION_ATTEMPT_IN_FLIGHT: core::sync::atomic::AtomicBool =
 /// The player asked for that to stop and, from their seat, it did. So the pins stop saying
 /// otherwise the moment the cancel is driven, while the warp stays refused until the session is
 /// genuinely idle, because ersc is still unwinding a join and moving the player through it is how
-/// a session gets corrupted (bd `er-effects-rs-uob3`).
+/// a session gets corrupted.
 ///
 /// Defaults to `false` for the same reason as the display latch: nothing looked yet, so nothing is
 /// blocked.
@@ -1185,7 +1185,7 @@ mod tests {
 
     /// Serialises every test that moves the process-global attempt latches, in this module and in
     /// `cancel_window_tests`. A test that writes them without holding this lock can clear the
-    /// latch between another test's write and its assert, which on 2026-10-22 failed PR #587's CI
+    /// latch between another test's write and its assert, which on 2026-10-22 failed CI
     /// with `Warpable` where `MarkersOnly` was just set.
     pub(super) static POLICY_LATCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Answer "can function A still reach function B?" from a built PE, not from the source.
 
-Written for bd `er-effects-rs-uuly`, the P0 where a garbage non-NULL `key` from Steam/Seamless
+Written for the P0 where a garbage non-NULL `key` from Steam/Seamless
 walked into MSVC `strlen` and took the game down. The fix (`er_game_base::mem::safe_read_cstr`)
 is a source change; the question a reviewer actually needs answered is whether the emitted code
 still has the edge. Reading the source back cannot answer that -- inlining, tail calls and

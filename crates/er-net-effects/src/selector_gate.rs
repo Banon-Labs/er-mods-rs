@@ -53,7 +53,7 @@
 //!
 //! The `[+]` header is a mouse target at absolute screen coordinates, hit-tested against
 //! `imgui::Io::mouse_pos`, which hudhook fills from `WM_MOUSEMOVE` / `WM_INPUT` on the game's
-//! window. From #317 until 2026-08-31 that click was the only thing that could expand the bar,
+//! window. From the bar's introduction until 2026-08-31 that click was the only thing that could expand the bar,
 //! and it never once fired.
 //!
 //! What was measured, live, run `br-20260831-063324-0a97`, `/proc/<pid>/mem` (no injection):
@@ -452,7 +452,7 @@ mod tests {
         );
     }
 
-    /// The regression. The bar ships minimized, and from #317 until 2026-08-31 the only thing that
+    /// The regression. The bar ships minimized, and until 2026-08-31 the only thing that
     /// could expand it was a left click on a hit box in a screen corner -- which scored
     /// `overlay_toggle_clicks == 0` across a measured 1,296,264 rendered frames. So the shipped
     /// default must have a key that acts while the bar is closed, or the effect list and the four

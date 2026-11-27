@@ -151,7 +151,7 @@ pub fn input_manager(base: usize) -> Option<usize> {
     unsafe { read_usize(address) }.filter(|p| *p >= HEAP_LO)
 }
 
-// --- Native EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---
+// --- Native EquipTop open (RE 2026-07-23) ---
 // The pause list opens submenus exclusively through MenuJob factories + CSPopupMenu job submit;
 // there is no request byte for Equipment (the +0x121/+0x122 request family covers only
 // IngameTop/WorldMap). Equipment row = st_pauseMenuClickHandlerInfoList[0], factory
@@ -257,7 +257,7 @@ pub fn native_open_equip_menu(_base: usize, input_manager_ptr: usize) -> bool {
 }
 
 /// Native open of the Inventory menu (02_020_Inventory -- the Melee/Ranged/Shields tabs whose item
-/// cells carry the bottom-left ArtsIcon child, bd er-effects-rs-pe98 GFX geometry).
+/// cells carry the bottom-left ArtsIcon child).
 pub fn native_open_inventory_menu(_base: usize, input_manager_ptr: usize) -> bool {
     native_open_top_menu(input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
 }

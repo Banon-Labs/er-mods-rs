@@ -150,7 +150,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if !valid(summary) {
         return;
     }
-    // Slot->name dump, once per run (er-effects-rs-hi2 attribution): the anomaly hypothesis is
+    // Slot->name dump, once per run (attribution): the anomaly hypothesis is
     // character-specific (Patches' boot/menu-path lifecycle differs on reload), so per-window
     // anomalies must be joinable to which character each retarget slot holds -- readable here from
     // the ProfileSummary records the pipeline already uses.
@@ -254,7 +254,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if deserialize_completed {
         unsafe { portrait_render_slot_semaphore(base, target_slot) };
     }
-    // Armor-resolution oracle (bd er-effects-rs-91l5 Layer 1). Every tick, read the live stage-0
+    // Armor-resolution oracle (Layer 1). Every tick, read the live stage-0
     // ChrAsm of the renderer this tick is driving and publish the four EquipParamProtector rows the
     // model build will actually request. It reads the same `target_slot` the kick and the bake capture
     // use, so it can never score a renderer other than the displayed one. Read-only, fault-guarded,
@@ -507,7 +507,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
                 // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
                 // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
-                // No silent slot-0 FALLBACK (bd er-effects-rs-91zb step 3). This used to read
+                // No silent slot-0 FALLBACK. This used to read
                 // `portrait_loaded_slot()`, which collapses "no source names a slot" to 0 via
                 // `unwrap_or(0)` -- so with nothing confirmed, slot 0's head was published as
                 // though it were the loaded character. Publish nothing instead: a missing portrait
@@ -551,7 +551,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                         if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                             *g = Some((w, h, px.clone()));
                         }
-                        // Identity tag rides with every bridge write (bd er-effects-rs-dpf6 Phase 1).
+                        // Identity tag rides with every bridge write.
                         // Game thread: hash slot `s`'s summary record directly.
                         LS_PORTRAIT_PUBLISHED_SLOT.store((s + 1) as usize, Ordering::SeqCst);
                         LS_PORTRAIT_PUBLISHED_NAME_HASH
@@ -583,7 +583,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
 pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
-    // TEARDOWN fence (freeze relaxation, er-effects-rs-l1x): raise the fence before any
+    // TEARDOWN fence (freeze relaxation): raise the fence before any
     // delete-enqueue below (both the orphan reclaim and the native table teardown in original()),
     // then wait out a render-thread pump caught mid-drive. The pump is one model update+draw
     // (sub-ms), so the 10ms cap is generous; a timeout is counted, not fatal -- worst case equals
@@ -658,7 +658,7 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         && !crate::gating::switch_reload_active()
         && let Ok(base) = game_module_base()
     {
-        // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch
+        // The slot we render: the newly-selected character on a switch
         // (SELECTED_SLOT), else the loaded slot (ac0). portrait_target_slot() is what makes the
         // loading portrait show the character just picked, not the one still resident.
         let slot = portrait_target_slot();
@@ -736,7 +736,7 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
 /// walk, the entry itself is never checked), and its 10-slot table setup is called from exactly one
 /// native site -- the TitleTopDialog constructor -- so our cloned in-world ProfileSelect reopens run
 /// it against whatever the last teardown left; the 3rd in-session open found the table fully empty
-/// and AV'd at `[null+0x754]` (er-effects-rs-j3r). Three layers, all fault-guarded + catch_unwind:
+/// and AV'd at `[null+0x754]`. Three layers, all fault-guarded + catch_unwind:
 ///   1. DIAG: log the full table once per distinct degraded (mask, caller) pattern.
 ///   2. REPAIR: a fully-empty table (the proven crash state) is rebuilt via the engine's own no-arg
 ///      setup (`PROFILE_TABLE_BUILDER_RVA`; its internal teardown is a no-op on an all-null table),

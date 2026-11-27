@@ -223,7 +223,7 @@ test_allow_git_operations_with_commit_variable_names_on_main if {
 	count(denials) == 0
 }
 
-# --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ---------------
+# --- Shell-wrapper payloads (2026-08-26) ---------------
 #
 # This guard shared ER-EFFECTS-BLOCK-MAIN-PUSH's anchor construction and so
 # shared its hole: every case below produced ZERO denials before the

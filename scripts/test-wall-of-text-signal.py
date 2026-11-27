@@ -196,6 +196,34 @@ def main() -> int:
         "expected a heading to be a signpost rather than a paragraph",
     )
 
+    # The shape measured on 2026-11-11: one paragraph, a blank line, and a line holding only the reply
+    # phrase, which AGENTS.md puts on a line of its own. It was reported as 2 paragraphs.
+    expect(
+        "one-paragraph-plus-handed-reply-phrase-is-silent",
+        [
+            user("status?"),
+            assistant_text(
+                "The guards branch `fix/cupcake-stop-guards-1111` (35 paths in all) passes every gate."
+                "\n\n`authorize commit`"
+            ),
+        ],
+        silent,
+        "expected a handed reply-phrase line not to count as a second paragraph",
+    )
+
+    expect(
+        "two-paragraphs-plus-handed-reply-phrase-still-fires",
+        [
+            user("status?"),
+            assistant_text(
+                "The guards branch passes every gate.\n\nThe audit changed no other verdict."
+                "\n\n`authorize 1f3a9c2e7b4d`"
+            ),
+        ],
+        fires(2),
+        "expected two real paragraphs to be reported as 2 with the phrase line dropped",
+    )
+
     # ---- Clean ------------------------------------------------------------------------------------
 
     expect(

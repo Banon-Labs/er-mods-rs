@@ -30,7 +30,9 @@ directions -- it is the note that tells the next person which counts are depreca
 which are someone else's contract. A reason for a file the baseline does not list is stale and
 fails, so the notes cannot outlive what they describe.
 
-Scope: every tracked file (`git ls-files`) except `Cargo.lock`, the baseline itself (its reasons
+Scope: every tracked file, and every untracked file git does not ignore (`git ls-files --cached
+--others --exclude-standard`; an untracked file has no entry, so it is held to zero), except
+`Cargo.lock`, the baseline itself (its reasons
 quote the keys they excuse), and anything with a NUL byte in its first 8 KiB, which is binary. Content is read from the working tree, so the count is of what
 the next commit would carry.
 
@@ -77,14 +79,25 @@ def count_in(data: bytes) -> int:
     return len(PATTERN.findall(data))
 
 
-def tracked_paths(root: Path) -> list[str]:
+def tracked_paths(root: Path, *, untracked: bool = True) -> list[str]:
+    """Tracked files plus untracked ones git does not ignore: everything the next commit could carry.
+
+    Tracked alone let a new, unstaged file pass locally and fail CI once committed (measured
+    2026-11-25 on the comment-caps gate, which selected its files the same way). An untracked file
+    has no baseline entry, so `judge` holds it to zero.
+
+    `untracked=False` is the index alone, staged files included, and is what `--write-baseline`
+    records: an untracked file's count in a baseline committed without that file reads 0 in CI,
+    below its number, and fails as a fall."""
+    others = ["--others", "--exclude-standard"] if untracked else []
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z"],
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", *others],
         capture_output=True,
         check=True,
         timeout=GIT_TIMEOUT_SECONDS,
     ).stdout
-    return [p.decode("utf-8") for p in out.split(b"\0") if p]
+    # An unmerged path is listed once per stage; the dict keeps the first and the order.
+    return [p.decode("utf-8") for p in dict.fromkeys(out.split(b"\0")) if p]
 
 
 def read_tracked(root: Path, rel: str) -> bytes | None:
@@ -98,9 +111,9 @@ def read_tracked(root: Path, rel: str) -> bytes | None:
     return None if is_binary(data) else data
 
 
-def tree_counts(root: Path) -> dict[str, int]:
+def tree_counts(root: Path, *, untracked: bool = True) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for rel in tracked_paths(root):
+    for rel in tracked_paths(root, untracked=untracked):
         data = read_tracked(root, rel)
         if data is None:
             continue
@@ -209,7 +222,11 @@ def main() -> int:
         return 0
 
     if args.write_baseline:
-        counts = tree_counts(REPO_ROOT)
+        # The index only: the scan covers untracked files, the baseline never records them.
+        counts = tree_counts(REPO_ROOT, untracked=False)
+        for path, n in tree_counts(REPO_ROOT).items():
+            if path not in counts:
+                print(f"not recorded: {path} ({n}) is untracked, so the gate holds it to zero")
         reasons = load_baseline(baseline_path)[1] if baseline_path.exists() else {}
         dropped = sorted(set(reasons) - set(counts))
         baseline_path.write_text(render_baseline(counts, reasons), encoding="utf-8")
@@ -268,19 +285,41 @@ def selftest() -> int:
     # End to end through git, because the file walk -- ls-files, the binary probe, the skip list,
     # the working tree rather than the index -- is where a ratchet goes quietly blind.
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        git = ["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t"]
+        # The repository is a subdirectory, so the baseline and the report written beside it are
+        # not untracked files of the repository the gate scans.
+        root = Path(tmp) / "repo"
+        root.mkdir()
+        git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run(git + ["init", "-q"], check=True, timeout=GIT_TIMEOUT_SECONDS)
+        (root / ".gitignore").write_text("ignored.rs\n", encoding="utf-8")
         (root / "a.rs").write_text(f"// {word}\nlet {word.title()}Table = 1;\n", encoding="utf-8")
         (root / "data.bin").write_bytes(b"\0" + word.encode())
         (root / "Cargo.lock").write_text(f"name = \"{word}\"\n", encoding="utf-8")
         (root / "untracked.rs").write_text(word, encoding="utf-8")
-        subprocess.run(git + ["add", "a.rs", "data.bin", "Cargo.lock"], check=True, timeout=GIT_TIMEOUT_SECONDS)
-        check("only tracked text files outside the skip list count", tree_counts(root), {"a.rs": 2})
+        (root / "ignored.rs").write_text(word, encoding="utf-8")
+        subprocess.run(
+            git + ["add", ".gitignore", "a.rs", "data.bin", "Cargo.lock"], check=True, timeout=GIT_TIMEOUT_SECONDS
+        )
+        check(
+            "tracked and untracked, not ignored text files outside the skip list count",
+            tree_counts(root),
+            {"a.rs": 2, "untracked.rs": 1},
+        )
 
-        baseline = root / "baseline.json"
+        baseline = Path(tmp) / "baseline.json"
         quiet = open(Path(tmp) / "out.txt", "w", encoding="utf-8")
         baseline.write_text(render_baseline({"a.rs": 2}, {}), encoding="utf-8")
+        # Measured 2026-11-25 on the comment-caps gate: a new file nobody had staged passed a local
+        # run and failed CI once committed. It has no baseline entry, so it is held to zero.
+        check("the gate fails on an untracked file that has one", run_gate(root, baseline, quiet, quiet), 1)
+        # The baseline writer records the index (a.rs is staged, never committed) and never an
+        # untracked file: CI checks out the commit without it and would fail its entry as a fall.
+        check(
+            "the baseline writer records staged files and leaves untracked ones out",
+            tree_counts(root, untracked=False),
+            {"a.rs": 2},
+        )
+        (root / "untracked.rs").unlink()
         check("the gate passes at the recorded number", run_gate(root, baseline, quiet, quiet), 0)
         (root / "a.rs").write_text(f"// {word} {word}\nlet {word.title()}Table = 1;\n", encoding="utf-8")
         check("the gate fails when a tracked file gains one", run_gate(root, baseline, quiet, quiet), 1)
@@ -295,6 +334,7 @@ def selftest() -> int:
         quiet.close()
         report = (Path(tmp) / "out.txt").read_text(encoding="utf-8")
         check("a rise is reported with its line", f"a.rs:1: // {word} {word}" in report, True)
+        check("an untracked rise says it has no entry", f"rose: untracked.rs: 1 x {word}, no baseline entry" in report, True)
         check("a rise tells the author what to write", "Write `color`" in report, True)
         check("a fall says how to lower the baseline", "--write-baseline" in report, True)
 

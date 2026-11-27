@@ -47,8 +47,7 @@ pub use constants_moved::*;
 #[cfg(windows)]
 pub use host::{TitleFlowHost, install_host};
 
-// Autoload/own-load/own-stepper cluster moved out of the root crate on 2026-08-25 (the
-// `refactor/autoload-title-flow` slice). Same flat include! layout and the same
+// Autoload/own-load/own-stepper cluster moved out of the root crate on 2026-08-25. Same flat include! layout and the same
 // `use crate::compat::*;` header as the files above; only visibility changed
 // (`pub(crate)` -> `pub`) so the root crate's `experiments::title` glob shim keeps every
 // old call site resolving. The three `constants_*` tables were `include!`d into the root

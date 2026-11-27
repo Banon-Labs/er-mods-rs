@@ -555,7 +555,7 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
     //
     // The flat scan sees `dialog+0x1f8` as one candidate pointer, reads the first row's first
     // qword as if it were a vtable, gets no match, and moves on -- it never strides. That is why
-    // run br-20260906-195900-9b8f (PR #403) and br-20260906-195423-28aa (main) both logged
+    // run br-20260906-195900-9b8f (branch build) and br-20260906-195423-28aa (main) both logged
     // `loadgame-scan: done hits=0` and then parked at `PREPARING SAVE 6/11 (COMPLETE 2/2)`
     // forever: the Continue MenuWindowJob latch is unsatisfiable by construction (bd
     // `continue-latch-is-unsatisfiable-docall-is-backscreen-accept-is-global-busy-2026-09-06`),

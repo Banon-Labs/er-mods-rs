@@ -8,7 +8,7 @@ use crate::prelude::*;
 /// the head's own cluster (not an assumed clear value) makes this robust to the engine's Z direction and to
 /// the fact that the corners are not all background (a portrait's shoulders fill the bottom corners), and
 /// deriving the head reference from the colour buffer (not the geometric centre) makes it robust to where
-/// the head sits in the frame (er-effects-rs-y134). Fail-open on
+/// the head sits in the frame. Fail-open on
 /// every uncertainty (no depth buffer, dims mismatch, no separable gap) -> the color buffer is left fully
 /// opaque, exactly the pre-existing display, so this can only add the cutout, never regress the head. Emits
 /// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
@@ -154,7 +154,7 @@ fn corner_bg_rgb(cpx: &[u8], w: usize, h: usize) -> Option<(i32, i32, i32)> {
 /// corner-background colour), subsampled by 2 on both axes. Used as `compute_depth_mask`'s foreground
 /// reference: comparing this median against a threshold is a majority vote of the head's own pixels, so
 /// the kept cluster is the one that actually overlaps the head, wherever the head sits in the frame
-/// (er-effects-rs-y134: Sacred Bean's pose at the 6.0x framing put the geometric centre off the head,
+/// (Sacred Bean's pose at the 6.0x framing put the geometric centre off the head,
 /// the central patch sampled the wrong cluster, and the fresh silhouette missed the head -- IoU=14%).
 /// `None` when the colour head is degenerate (under ~1% of the frame) -- caller falls back to the
 /// central-patch reference.
@@ -200,7 +200,7 @@ fn color_head_median_depth(depth: &[f32], cpx: &[u8], w: usize, h: usize) -> Opt
 /// head; low when a fresh mask of the wrong depth silhouette is applied to this head (the 2nd-character
 /// desync). Subsampled by 2 for cost; 100 (perfect) on any degenerate input so it never false-trips.
 ///
-/// Two regimes (er-effects-rs-y134): symmetric IoU assumes the colour-head and the kept region have
+/// Two regimes: symmetric IoU assumes the colour-head and the kept region have
 /// comparable sizes, but a dark character on the dark IBL backdrop clears FG_DIST on only a sliver of
 /// its pixels (Sacred Bean: 2.6% of the frame vs a 19% kept cluster), so even a perfect mask is capped
 /// at |head|/|kept| ~= 14% and the gate held every frame (clean=0, no portrait/stats). When that
@@ -306,7 +306,7 @@ fn compute_depth_mask(
     // classifies as head (far from the corner-background colour). We keep the cluster this belongs to
     // and cut the other -- so the cut is robust to the engine's Z direction (we never assume near/far
     // == 0) and to where the head sits in the frame. The old central-patch median broke on Sacred Bean
-    // (er-effects-rs-y134): at the 6.0x head-and-torso framing this model's pose put the geometric
+    // at the 6.0x head-and-torso framing this model's pose put the geometric
     // centre off the head, the patch sampled the wrong cluster, and every fresh silhouette missed the
     // head (IoU=14% < 25% -> zero clean publishes, no portrait/stats). The central patch survives only
     // as the fallback when the colour head is degenerate.
@@ -392,7 +392,7 @@ fn compute_depth_mask(
             }
         }
     }
-    // Degenerate-mask rejection (er-effects-rs-hi2): a fresh mask cutting under the publish floor is
+    // Degenerate-mask rejection: a fresh mask cutting under the publish floor is
     // not a real bg/head separation -- accepting it used to cache it, and every later gapless frame
     // reused the poisoned cache, so a whole window sat in the lowmask band (run 2026-07-03 ~21:17,
     // window slot4: lowmask=203 clean=0, prior head stuck on screen ~30s). Reject it (None) so the
@@ -426,7 +426,7 @@ fn compute_depth_mask(
         // no longer sees the candidate pointer, so PROFILE_DEPTH_PIN is not written here anymore.)
         return Some(mask);
     }
-    // Second pass (backdrop-geometry recovery -- er-effects-rs-hi2 root fix, runs 2026-07-03).
+    // Second pass (backdrop-geometry recovery -- root fix, runs 2026-07-03).
     // Some characters' portrait scenes render backdrop geometry at a depth just behind the head
     // (observed: box ~0.0199 vs head ~0.0210) plus a sliver of true cleared depth (exact dmin=0).
     // The widest histogram gap is then the wrong gap (cleared..geometry, bins 1..112), so the "bg"

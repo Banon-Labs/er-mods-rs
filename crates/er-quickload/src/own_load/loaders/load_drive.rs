@@ -101,7 +101,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
     unsafe { dump_load_correctness(base, n) };
-    // Owner diagnostic (er-effects-rs-mr2, save-safe pure reads): the prior continue crash used the
+    // Owner diagnostic (save-safe pure reads): the prior continue crash used the
     // wrong owner (*(GameDataMan+0x8)). Log every continue_confirm owner candidate + each one's
     // +0x284 (new-game flag) byte so a verify-only run reveals which is the SetState-able title
     // owner before we ever fire continue_confirm. This is independent of the gated continue step.
@@ -367,13 +367,13 @@ unsafe fn title_menu_drained_for_commit(base: usize, owner: usize, n: u64) -> bo
     false
 }
 
-/// Own-load final step (er-effects-rs-mr2): after the proven verify-only parse mounted a real c30 +
+/// Own-load final step: after the proven verify-only parse mounted a real c30 +
 /// real character, fire the guarded native `continue_confirm` 0x140b0fd50 -> `SetState5` 0x140b0f530
 /// to stream the character into the playable world. `continue_confirm` reads owner = [rcx+8] off
 /// the shim, reads GameMan+0xc30 (already real from our parse) into owner+0xbc, then
 /// SetState(owner, 5) -> the per-frame title-flow step machine streams the world.
 ///
-/// Owner (er-effects-rs-mr2 fix): the owner must be the SetState-able title owner threaded in from
+/// Owner (fix): the owner must be the SetState-able title owner threaded in from
 /// `own_stepper_idx10` (the validated title-flow object), not *(GameDataMan+0x8). The prior crash
 /// passed *(GameDataMan+0x8) (a different object) into continue_confirm and crashed inside
 /// SetState5. The owner diagnostic in the verify path logs all candidates for cross-checking.

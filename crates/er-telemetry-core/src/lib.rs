@@ -410,7 +410,7 @@ mod profiler {
     /// every one of the twenty-one shells installs its detours through its own statically linked
     /// MinHook, whose `Freeze()` suspends every other thread and rewrites their `RIP` through
     /// `Get`/`SetThreadContext`. Two suspenders that do not know about each other, one of them
-    /// firing continuously, is the shape of er-effects-rs-1742: three measured boots have wedged
+    /// firing continuously, is the shape of the boot wedge: three measured boots have wedged
     /// with the last log line being er-hook's `HOOK TRANSLATED`, which is the statement
     /// immediately before `MH_CreateHook`.
     ///

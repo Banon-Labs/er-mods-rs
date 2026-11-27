@@ -2,7 +2,7 @@
 //! pinned without a game.
 //!
 //! The regression these exist for is a specific qword: `0x2f003a00320063`, which
-//! `currentTopMenuJob+0x130` read on 1.17.1 (bd er-effects-rs-h09b). It is UTF-16 text, it is
+//! `currentTopMenuJob+0x130` read on 1.17.1. It is UTF-16 text, it is
 //! larger than the old `HEAP_LO` filter, and the old resolution handed it to every caller as a
 //! `CS::MenuWindow`. `refuses_a_utf16_asset_path_as_a_window` is that exact value, in that exact
 //! field, on a graph shaped like the live one.

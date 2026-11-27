@@ -7,7 +7,7 @@ checks pass before addressing any one of the failing reds in each future case
 `>>> stage policy RED (exit 1)   1702s   /run/user/1000/er-mods-rs-pre-push/6abca54e80d19a080c8579b188175fa73d210e01/policy.log`"
 
 What happened: the main session ran `git -C /home/banon/projects/er-mods-rs push -u origin
-chore/no-tracker-refs` in the background and opened a kitty split on its output with
+<branch>` in the background and opened a kitty split on its output with
 `scripts/kitty-tail-push.py`. That split is the user's view; it wakes nobody. The suite prints one
 `>>> stage <name> RED (exit <n>) <secs>s <log>` line per stage the moment the stage ends
 (`_check_run_stage` in scripts/check.sh) while the other stages keep running for up to an hour

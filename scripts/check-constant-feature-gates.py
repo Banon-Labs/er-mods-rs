@@ -33,8 +33,8 @@ not a dead branch. `_enabled` is the suffix this repo actually spells its featur
 
 `scripts/constant-feature-gates.baseline.json` records what exists today, per file, by name.
 The count may only go DOWN: a file may not gain one, and a file that loses one must record that
-too, so no file reads as owing more than it does. Zero is the target and bd er-effects-rs-rxgr
-tracks getting there; until then this stops the population growing.
+too, so no file reads as owing more than it does. Zero is the target;
+until then this stops the population growing.
 
 Usage:
   python3 scripts/check-constant-feature-gates.py
