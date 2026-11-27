@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Armament-icons badge oracle smoke (bd er-effects-rs-pe98): three-native me3 run --
-# input-harness (drive mode `equip`: boot -> Continue -> in-world -> pause menu ->
-# Confirm into Equipment -> dwell), telemetry DLL (timeseries semaphores), and
-# er_armament_icons.dll (TilePopulate post-hook + ArtsIcon badge draw + oracle
-# counters in er-armament-icons.log). No product DLL: the harness drives standalone.
+# Armament-icons badge oracle smoke: three-native me3 run -- input-harness (drive
+# mode `equip`: boot -> Continue -> in-world -> pause menu -> Confirm into Equipment
+# -> dwell), telemetry DLL (timeseries semaphores), and er_armament_icons.dll
+# (TilePopulate post-hook + ArtsIcon badge draw + oracle counters in
+# er-armament-icons.log). No product DLL: the harness drives standalone.
 #
 # Oracle (semaphore-progress teardown, not wall-clock): Pass when the badge log shows
 # "badge sample: DRAWN" lines (tile hook fired, ArtsIcon bound + un-hidden + icon

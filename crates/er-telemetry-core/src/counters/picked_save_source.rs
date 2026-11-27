@@ -133,8 +133,8 @@ pub static WORLD_LOST_TO_TITLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 // sets is indistinguishable from "the modal never appeared", which is the exact reading this pair
 // existed to make impossible.
 //
-// The measurement behind them is not lost, and it is worth re-wiring on purpose rather than
-// carrying here as a declaration nobody sets. bd er-effects-rs-e00a holds it: what the box means,
+// The measurement behind them is worth re-wiring on purpose rather than carrying here as a
+// declaration nobody sets. It covers what the box means,
 // the two caller rvas that tell a refused load apart from a terms-of-service or connection box,
 // and the correction that the earlier version of the gate was dead in a no-autoload build. Putting
 // it back means adding the write at the product's own msgbox site and proving it on a run where

@@ -455,7 +455,7 @@ pub unsafe extern "system" fn DllMain(
 // If this module wins the IMGUI context, every other overlay in the process has to be able to
 // find it by name. `overlay_host::register_with_host` locates the host by looking this export up
 // on each loaded module, so a host that does not define it is a host nobody can register with --
-// and every other overlay in the profile silently draws nothing. That is the #336 regression the
+// and every other overlay in the profile silently draws nothing. That is the regression the
 // arbitration exists to prevent, and omitting this line reintroduces it. The picker installs
 // lazily, so this DLL normally loses the claim to a shell that installs at attach; "normally" is
 // a timing accident, not a guarantee.

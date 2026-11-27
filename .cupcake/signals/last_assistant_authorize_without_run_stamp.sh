@@ -7,12 +7,12 @@
 # exits 1 for that sha: the commits change code under crates/ and no DLL log carries
 # `build git=<sha>`. Empty otherwise, and empty on anything it cannot measure (fail-open).
 #
-# User, 2026-10-16, after an agent asked for `authorize <sha>` on feat/er-duel-rules and the push
-# was then refused by the pre-push hook and by `ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE` for want of
-# a run stamp: "I knew it needed a run stamp to push. I was hoping you would figure it out (again)
-# prior to asking me to authorize a push". Building the DLL at the tip and launching it needed
-# nothing from the user, so the authorization was asked for one step too early, and not for the
-# first time.
+# User, 2026-10-16, after an agent asked for `authorize <sha>` on a branch and the push was then
+# refused by the pre-push hook and by `ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE` for want of a run
+# stamp: "I knew it needed a run stamp to push. I was hoping you would figure it out (again) prior
+# to asking me to authorize a push". Building the DLL at the tip and launching it needed nothing
+# from the user, so the authorization was asked for one step too early, and not for the first
+# time.
 #
 # What it reads:
 #   * the closing prose run of the last turn (`Turn.text_runs[-1]`), through the Stop event's

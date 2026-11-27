@@ -67,6 +67,32 @@ CASES = [
     ),
     ("empty text has no paragraphs", "", 0),
     ("whitespace-only text has no paragraphs", "   \n\n  \n", 0),
+    # --- a reply phrase handed on its own line, which AGENTS.md requires, is not a paragraph ---
+    (
+        "prose then a handed `authorize commit` line is one paragraph",
+        "The guards branch is ready to keep.\n\n`authorize commit`",
+        1,
+    ),
+    (
+        "prose then a handed `authorize <sha>` line is one paragraph",
+        "The guards branch is ready to push.\n\n`authorize 1f3a9c2e7b4d`",
+        1,
+    ),
+    (
+        "a handed phrase without backticks is still not prose",
+        "The guards branch is ready to keep.\n\nauthorize commit",
+        1,
+    ),
+    (
+        "two prose paragraphs and a handed phrase line are still two",
+        "The guards branch is ready to keep.\n\nThe audit changed no other verdict.\n\n`authorize commit`",
+        2,
+    ),
+    (
+        "a phrase named inside a sentence is prose",
+        "Send the authorize commit reply when ready.\n\nThe audit changed no other verdict.",
+        2,
+    ),
 ]
 
 

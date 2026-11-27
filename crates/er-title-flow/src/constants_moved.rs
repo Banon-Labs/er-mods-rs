@@ -346,7 +346,7 @@ pub const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// suppress on set (`SaveRequest_Profile`, `RequestSave`), some act on set
 /// (`STEP_MenuJobWait` -> SetState(0xb)). Step machines short-circuit to terminal states at
 /// teardown, which is exactly why product code writing it appears to "work" -- it advances the
-/// title by telling the whole engine it is shutting down. See bd er-effects-rs-d4em.
+/// title by telling the whole engine it is shutting down.
 /// Canonical name should be GAME_SHUTDOWN_CLEANUP_FLAG_RVA; the four existing aliases now
 /// derive from this one declaration (2026-08-01) so the value has a single home.
 pub const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d8c740;
@@ -458,7 +458,7 @@ pub const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 pub const ONLINE_PREDICATE_DISABLE_RVA: usize = 0xcadf80;
 
 /// Menu offline-notice gate -- the third menu-open popup, root-caused 2026-06-23
-/// (bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`, Ghidra RE `er-effects-rs-yvf`).
+/// (bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`, Ghidra RE).
 /// `Menu_IsEnableOnlineMode` (2.7.2.0 0x140e59870) is a lazy-init cached getter that defaults true. The
 /// TitleTopDialog ctx-init step (1.16.2 0x14082d0d0) computes
 /// `TitleFlowContext->notReleaseFlag55 (+0x18C) = !Menu_IsEnableOnlineMode()`. With the getter true and the
@@ -1126,7 +1126,7 @@ pub const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af94c0;
 /// (advance requestCode to stable + tear the ending child down). On the warm reload FUN_140eb5550 (an
 /// outer-stepper vtable done-query, DECOUPLED from the MoveMapStep finalize substate) reports finished
 /// while the ending advancer is only at substate 8, so the teardown races ahead of case 8 (which would
-/// post substate 9) and strands the reload -> revert to title (bd er-effects-rs-9fmm, fresh
+/// post substate 9) and strands the reload -> revert to title (fresh
 /// load1-vs-load2 diff). The defer detour replicates the native's own "child not finished" early-return
 /// while the MoveMapStep finalize substate is in [1..=8], giving the advancer the frames to reach 9.
 pub const INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA: usize = 0x00aedef0;
@@ -1860,7 +1860,7 @@ pub static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize = AtomicUsize::new(PRODUCT_COR
 ///
 /// `PRODUCT_CORE_LAST_BLOCKER` is recomputed every tick but only printed every
 /// `OWN_STEPPER_LOG_INTERVAL` ticks, which samples the gate far too coarsely to say when it
-/// cleared. Measured 2026-09-21 on the boot-timing baseline (bd er-effects-rs-uxct): the gate
+/// cleared. Measured 2026-09-21 on the boot-timing baseline: the gate
 /// printed at tick 60 and tick 120, the full read submitted between tick 120 and tick 180, and the
 /// log therefore cannot say which of the eleven terms was last to become true, nor how long the
 /// autoload spent waiting on it. Comparing against this makes the gate log a transition record --

@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "score the attack spells in the pouch by how readable they are on a whiff"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Before a Glintstone Cometshard's bolt leaves the staff, can you tell it apart from a Comet, Shard Spiral or Night Comet, and a tap from a charge?"}]}}

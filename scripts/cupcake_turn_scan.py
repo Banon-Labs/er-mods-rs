@@ -13,12 +13,19 @@ What lives here (and nowhere else):
   * turn bucketing               -- `split_turns`; a turn is bounded by real user prompts, and a
                                     tool-result carrier "user" event does not split one
   * substantive work vs peeking  -- `bash_is_status_peek`, `Turn.work`
-  * blocked-on-the-user prose    -- `USER_WAIT_RE`, `blocked_on_user`
+  * blocked-on-the-user prose    -- `USER_WAIT_RE`, `blocked_on_user`; a reply phrase handed on a
+                                    line of its own (`HANDED_REPLY_LINE_RE`, `hands_reply_phrase`)
   * live background work         -- `live_background_work`: a backgrounded Bash or an async Agent
                                     launch that has not reported back yet, and whether the current
                                     turn is the one that started it
+  * subagents left open          -- `finished_open_agents`: a subagent the main session launched
+                                    that finished and was not closed with TaskStop; every agent's
+                                    state, waiting ones included, is `subagent_states`
   * where a paragraph starts     -- `prose_paragraphs`, and `Turn.text_runs`, the contiguous prose
                                     runs a length rule must measure instead of the whole turn
+  * replay of past transcripts   -- `closing_messages`, `replay_closings`: every closing message a
+                                    Stop classifier's `--replay` judges, chosen the way its signal
+                                    chooses the turn
 
 Signal-specific prose classification (which phrases are banned, how long is too long) stays in the
 individual signal: that is the part each guard genuinely owns.
@@ -277,6 +284,62 @@ def last_text_turn(turns: list[Turn]) -> Turn | None:
     return None
 
 
+# --- replay over past transcripts -------------------------------------------------------------
+#
+# A Stop classifier's `--replay` judges every closing message of the newest transcripts, to find
+# the false positives and misses its cases do not hold. The turn it judges is chosen here, once,
+# so every classifier replays the same turns its signal would have judged.
+
+def closing_messages(path: str):
+    """(turn index, timestamp, closing message) for every turn of `path` that ended on prose, chosen
+    the way the signal chooses the turn it judges."""
+    turns, stamps = [Turn()], [""]
+    for ev in load_events(path):
+        if is_real_user_prompt(ev):
+            turns.append(Turn())
+            stamps.append("")
+            continue
+        if ev.get("type") != "assistant":
+            continue
+        for block in ev.get("message", {}).get("content", []) or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                turns[-1].blocks.append(("text", block["text"]))
+                stamps[-1] = ev.get("timestamp", stamps[-1])
+            elif block.get("type") == "tool_use":
+                turns[-1].blocks.append(("tool", block))
+    for i, turn in enumerate(turns):
+        if not turn.texts or turn.last_text_index < 0 or turn.tool_after(turn.last_text_index):
+            continue
+        yield i, stamps[i], turn.text_runs[-1]
+
+
+def default_transcript_dir() -> str:
+    """The main checkout's Claude Code project directory. Claude Code names it after the project's
+    path with every character that is not a letter or digit turned into "-"; a worktree's own
+    directory holds only its own sessions, so a worktree replays the main checkout's."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main_repo = repo.split("/.worktrees/")[0]
+    return os.path.expanduser("~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", main_repo))
+
+
+def replay_closings(limit: int, tdir: str, judge) -> tuple[int, int]:
+    """Call `judge(session, turn_index, timestamp, closing)` for every closing message of the
+    `limit` newest transcripts in `tdir`; `session` is the transcript's first 8 characters. Returns
+    (transcripts read, closing messages judged)."""
+    import glob
+
+    files = sorted(glob.glob(os.path.join(tdir, "*.jsonl")), key=os.path.getmtime, reverse=True)[:limit]
+    judged = 0
+    for path in files:
+        sid = os.path.basename(path)[:8]
+        for i, stamp, closing in closing_messages(path):
+            judged += 1
+            judge(sid, i, stamp, closing)
+    return len(files), judged
+
+
 # --- prose segmentation -----------------------------------------------------------------------
 
 # Why this lives here and not in the signal. The module docstring says prose classification stays in
@@ -320,8 +383,9 @@ def prose_paragraphs(text: str) -> list[str]:
     """The blank-line-delimited blocks of the text that are prose the user has to read.
 
     Structure is not prose and never counts: fenced code (closed or left open), tables, list items
-    and their indented continuations, headings, horizontal rules, and a caption line that introduces
-    structure in the same block. The objection this serves is to reading, and those are scanned.
+    and their indented continuations, headings, horizontal rules, a caption line that introduces
+    structure in the same block, and a line holding nothing but a handed reply phrase
+    (`HANDED_REPLY_LINE_RE`). The objection this serves is to reading, and those are scanned.
 
     Classification is per line, not per block, which is the fix for the shape that used to inflate
     the count most: the old rule exempted a block only when every line was a table row (or every line
@@ -330,6 +394,15 @@ def prose_paragraphs(text: str) -> list[str]:
     """
     text = _FENCED_RE.sub("\n", text)
     text = _OPEN_FENCE_RE.sub("\n", text)
+    # A line that is only `authorize commit` or `authorize <sha>` is the reply the commit and push
+    # guards wait for, and AGENTS.md puts it on a line of its own, so the shape the rules require
+    # must not cost a paragraph. Measured 2026-11-11: an answer of one paragraph beginning "The
+    # guards branch `<branch>` (35 paths i", a blank line, then a line holding only
+    # `authorize commit`, was reported to the next turn as 2 paragraphs of prose; so was an earlier
+    # one beginning "The guard work is merged onto origin/main and passes every g" that ended the
+    # same way. The line goes with its newline, so prose above and below it in one block stays one
+    # block. A phrase named inside a sentence does not match and is still prose.
+    text = "\n".join(l for l in text.split("\n") if not HANDED_REPLY_LINE_RE.match(l))
     out: list[str] = []
     for block in re.split(r"\n\s*\n", text):
         if not block.strip():
@@ -363,6 +436,25 @@ USER_WAIT_RE = re.compile(
 )
 
 
+# A line holding nothing but `authorize commit` or `authorize <7-40 hex sha>` (backticks optional)
+# hands the user the exact reply the commit and push guards wait for, and AGENTS.md puts a reply
+# phrase on a line of its own. Moved here on 2026-11-11 from last_assistant_ask_without_receiver.sh,
+# which still uses it, so the two cannot disagree about what a handed phrase looks like. A phrase named
+# inside a sentence ("the authorize commit reply") or a table row is not on a line of its own and
+# hands nothing.
+HANDED_REPLY_LINE_RE = re.compile(
+    r"^[ \t]*`?authorize\s+(?:commit|[0-9a-f]{7,40})`?[ \t]*$", re.MULTILINE
+)
+
+
+def hands_reply_phrase(text: str) -> bool:
+    return HANDED_REPLY_LINE_RE.search(text) is not None
+
+
+# A handed phrase is not part of `blocked_on_user`: that test also excuses a diagnosis with no fix, an
+# unexecuted promise, a described next step and a deferred evidence read, and a commit reply waited
+# on does not block fixing what the message diagnosed. Only the idle-hold signal, whose question is
+# whether the turn is waiting, reads `hands_reply_phrase` as well (2026-11-11).
 def blocked_on_user(text: str) -> bool:
     return bool(USER_WAIT_RE.search(text))
 
@@ -672,12 +764,20 @@ RUNNING_TASK_LAUNCH_RE = re.compile(
 MONITOR_END_EVENT_RE = re.compile(r"<event>\s*\[Monitor (?:expired|timed out)\b", re.IGNORECASE)
 
 
+# Where the harness writes a background task's output, as its launch acknowledgement names it:
+# "Output is being written to: /tmp/claude-1000/<project>/<session>/tasks/bx1.output."
+TASK_OUTPUT_FILE_RE = re.compile(r"Output is being written to:\s*(\S+)")
+
+
 @dataclass
 class RunningTask:
     task_id: str
     kind: str        # "bash" or "monitor"
     command: str
     launched_at: int  # event index
+    # The task's output file from its launch acknowledgement, "" when the result named none (a
+    # Monitor's acknowledgement does not).
+    output: str = ""
 
 
 def running_background_tasks(events: list[dict]) -> list[RunningTask]:
@@ -747,6 +847,163 @@ def running_background_tasks(events: list[dict]) -> list[RunningTask]:
                 if not m:
                     continue  # a foreground Bash that finished, or a Monitor that never started
                 task_id = m.group(1) or m.group(2)
-                running[task_id] = RunningTask(task_id, kind, cmd, at)
+                out = TASK_OUTPUT_FILE_RE.search(_result_text(block))
+                output = out.group(1).rstrip(".") if out else ""
+                running[task_id] = RunningTask(task_id, kind, cmd, at, output)
                 tool_to_task[uid] = task_id
     return sorted(running.values(), key=lambda t: t.launched_at)
+
+
+# --- subagents finished and not closed --------------------------------------------------------
+
+# The `<summary>` of a subagent's `<task-notification>`. Surveyed 2026-11-11 over every transcript
+# under ~/.claude/projects (1,942 agent notifications), it took exactly three shapes:
+#   <status>completed</status>  Agent "<description>" finished                               1,558
+#   <status>completed</status>  Agent "<description>" is waiting on its own background work    337
+#   <status>killed</status>     Agent "<description>" was stopped by Claude                     47
+# Only the first is an agent that finished. The second stopped with background jobs of its own still
+# running and notifies again when it stops for good; the third answers a TaskStop.
+TASK_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
+AGENT_SUMMARY_RE = re.compile(r'\A\s*Agent\s+(?:"|&quot;)(.*)(?:"|&quot;)\s+(\S.*?)\s*\Z', re.DOTALL)
+
+# An Agent launch names its agent once: "agentId: a4d14f2d4d71a5ba0 (internal ID ...". A SendMessage
+# that woke a finished agent answers `{"success":true,"message":"Resuming agent a4d14f2",
+# "resumedAgentId":"a4d14f2d4d71a5ba0",...}`; one sent to an agent still running answers "Message
+# queued for delivery to ... at its next tool round" and changes nothing.
+AGENT_ID_RE = re.compile(r"\bagentId:\s*([A-Za-z0-9_-]+)")
+RESUMED_AGENT_RE = re.compile(r'"resumedAgentId"\s*:\s*"([A-Za-z0-9_-]+)"')
+RESUMING_AGENT_RE = re.compile(r"\bResuming agent\b")
+
+# The events an agent's life is written in: the main session's tool calls and their results, and the
+# notifications the harness delivers (a user event, a queued_command attachment, a queue-operation).
+# The harness's request copies (`api-request-blob`) repeat those messages after the fact -- in session
+# 5ec7b779 the blob of a4d14f2d4d71a5ba0's "finished" notification is three lines after the real one
+# -- so a copy that landed after the TaskStop would reopen a closed agent. They are never read here,
+# whatever load_events kept.
+_AGENT_EVENT_TYPES = ("user", "assistant", "attachment", "queue-operation")
+
+
+@dataclass
+class Subagent:
+    agent_id: str
+    description: str
+    state: str        # "running", "waiting", "finished" or "closed"
+    changed_at: int   # event index of the last state change
+
+
+def finished_open_agents(events: list[dict]) -> list[Subagent]:
+    """Every subagent the main session launched that has finished and that the main session has not
+    closed. User directive 2026-11-11, verbatim, one quoted line at a time:
+      "If I ever see a subagent that is finished but hasn't been closed, I always have VERY HIGH"
+      "concerns that you consumed its results. I'm VERY WORRIED that you missed the changes UNTIL"
+      "you close it"
+
+    An agent is known only from the main session's own Agent call, whose result names its `agentId`.
+    An agent a subagent launched gets no such result here, though its notifications can reach this
+    transcript's queue (session 5ec7b779: "Survey charged skill AtkParams", a8d369a23e434bf65, was
+    enqueued and removed with no launch in the main transcript), so those notifications change
+    nothing. Sidechain events are skipped for the same reason.
+
+    Each agent moves through these states in transcript order:
+      * running  -- an async launch, or a SendMessage answered "Resuming agent" (resumedAgentId);
+      * finished -- a notification whose summary is `Agent "<description>" finished`;
+      * waiting  -- "is waiting on its own background work": parked with jobs of its own, not done;
+      * closed   -- a TaskStop (or KillShell) naming its id, whatever the result says: on an agent
+                    that already completed the harness refuses the stop ("is not running (status:
+                    completed)", "No task found with ID"), and the call is still the main session
+                    closing it. Also the "was stopped by Claude" notification that answers a stop,
+                    and a foreground Agent call, whose whole result came back inline.
+    An agent is returned when it is `finished` at the end of the transcript. There is no recency
+    cutoff: an agent left open twenty turns ago is as open as one that finished in this turn.
+    """
+    return [a for a in subagent_states(events) if a.state == "finished"]
+
+
+def subagent_states(events: list[dict]) -> list[Subagent]:
+    """Every subagent the main session launched, in the state the transcript leaves it (the states
+    and transitions `finished_open_agents` documents), oldest state change first.
+
+    `finished_open_agents` keeps the finished ones for the Stop guard that says "close it". The
+    PreToolUse guard that refuses a TaskStop on an agent still waiting on its own background work
+    (`scripts/cupcake_task_stop_waiting_agent.py`) reads the waiting ones. One reader, so the two
+    guards cannot disagree about which state an agent is in.
+    """
+    agents: dict[str, Subagent] = {}
+    launches: dict[str, str] = {}   # Agent tool_use id -> its description
+    resumes: dict[str, str] = {}    # SendMessage tool_use id -> its `to`
+
+    def mark(agent_id: str, state: str, index: int, description: str = "") -> None:
+        agent = agents.get(agent_id)
+        if agent is None:
+            return
+        agent.state = state
+        agent.changed_at = index
+        if description and not agent.description:
+            agent.description = description
+
+    for index, ev in enumerate(events):
+        kind = ev.get("type")
+        if kind not in _AGENT_EVENT_TYPES or ev.get("isSidechain"):
+            continue
+        if kind != "assistant":
+            for text in _notification_carriers(ev):
+                for m in TASK_NOTIFICATION_BLOCK_RE.finditer(text):
+                    body = m.group(1)
+                    task_id = TASK_ID_RE.search(body)
+                    if not task_id or task_id.group(1) not in agents:
+                        continue
+                    summary = TASK_SUMMARY_RE.search(body)
+                    parsed = AGENT_SUMMARY_RE.match(summary.group(1)) if summary else None
+                    if parsed is None:
+                        continue
+                    verb = parsed.group(2).lower()
+                    if verb == "finished":
+                        state = "finished"
+                    elif verb.startswith("is waiting on its own background work"):
+                        state = "waiting"
+                    elif verb.startswith("was stopped"):
+                        state = "closed"
+                    else:
+                        continue  # a wording the 2026-11-11 survey never saw changes nothing
+                    mark(task_id.group(1), state, index, parsed.group(1))
+
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                name = block.get("name") or ""
+                inp = block.get("input") if isinstance(block.get("input"), dict) else {}
+                bid = block.get("id") or ""
+                if name in ("Agent", "Task"):
+                    launches[bid] = str(inp.get("description") or "")
+                elif name == "SendMessage":
+                    resumes[bid] = str(inp.get("to") or "")
+                elif name in STOP_TOOLS:
+                    mark(str(inp.get("task_id") or inp.get("shell_id") or ""), "closed", index)
+            elif block.get("type") == "tool_result":
+                uid = block.get("tool_use_id") or ""
+                if uid in launches:
+                    description = launches.pop(uid)
+                    text = _result_text(block)
+                    ids = AGENT_ID_RE.findall(text)
+                    if block.get("is_error") or not ids:
+                        continue
+                    if BACKGROUND_LAUNCH_RE.search(text):
+                        agents.setdefault(ids[0], Subagent(ids[0], description, "running", index))
+                    else:
+                        agents.setdefault(ids[-1], Subagent(ids[-1], description, "closed", index))
+                elif uid in resumes:
+                    to = resumes.pop(uid)
+                    if block.get("is_error"):
+                        continue
+                    text = _result_text(block)
+                    resumed = RESUMED_AGENT_RE.search(text)
+                    if resumed:
+                        mark(resumed.group(1), "running", index)
+                    elif RESUMING_AGENT_RE.search(text):
+                        mark(to, "running", index)
+    return sorted(agents.values(), key=lambda a: a.changed_at)

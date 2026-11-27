@@ -9,8 +9,8 @@
 #     Puts the MEASURED CI state of the current branch's pull request into context before every
 #     answer, so "green" / "passing" / "CI is clean" cannot be written from a local gate result.
 #
-#     MEASURED 2026-09-03. An answer described PR #384 as "pushed, green, and now carries the
-#     retraction". At that moment `gh pr checks 384` read `check  pending`. The word came from a
+#     MEASURED 2026-09-03. An answer described a pull request as "pushed, green, and now carries the
+#     retraction". At that moment `gh pr checks` read `check  pending`. The word came from a
 #     local `scripts/check.sh` that had exited 0 minutes earlier and silently became a claim about
 #     GitHub. The user's objection is the rule: "saying it is 'green' while CI is not passing on the
 #     latest push is objectively false."
@@ -52,7 +52,7 @@ context_for(s) := msg if {
 
 context_for(s) := msg if {
 	s.verdict == "PENDING"
-	msg := concat("", ["CI STATE (measured, not remembered): PR #", s.number, " on `", s.branch, "` is PENDING -- ", s.summary, ". DO NOT write \"green\", \"passing\", \"CI is clean\" or any equivalent: nothing has finished. A local `scripts/check.sh` exit 0 is NOT this measurement -- different job set, and a fresh push often has nothing run against it yet. Say \"CI is still running\" and name the job."])
+	msg := concat("", ["CI STATE (measured, not remembered): PR #", s.number, " on `", s.branch, "` is PENDING -- ", s.summary, ". DO NOT write \"green\", \"passing\", \"CI is clean\" or any equivalent: nothing has finished. A local `scripts/check.sh` exit 0 is NOT this measurement -- different job set, and a fresh push often has nothing run against it yet. Say \"CI is still running\" and name the job only while a background `gh pr checks ", s.number, " --watch` follows it, tailed in a kitty split (`scripts/kitty-tail-task.py --match 'gh pr checks'`): this line is one read, not a watch, and ER-EFFECTS-NO-UNWATCHED-CI-CLAIM halts the claim without one."])
 }
 
 context_for(s) := msg if {

@@ -52,6 +52,10 @@ LONG_RUNS = [
     ("test-cupcake-stop-guards.py", re.compile(_RUN + r"test-cupcake-stop-guards\.py\b")),
     ("cargo xwin build", re.compile(r"\bcargo\s+xwin\s+build\b")),
     ("git push", re.compile(r"\bgit\s+(?:-C\s+\S+\s+)*push\b")),
+    # A watcher of GitHub CI (2026-11-25): the one thing that backs a closing "CI is still running"
+    # (no_unwatched_ci_claim), so the user sees it in a split like any other long run.
+    ("gh pr checks", re.compile(r"\bgh\s+pr\s+checks\b[^;&|\n]*\s--watch(?:=true)?(?=\s|$|[;&|)])")),
+    ("gh run watch", re.compile(r"\bgh\s+run\s+watch\b")),
 ]
 TAIL_RE = re.compile(r"kitty-tail-(?:task|push)\.py\b")
 # Where a tool's real progress goes, when it is not the task's own output. A tail call for that

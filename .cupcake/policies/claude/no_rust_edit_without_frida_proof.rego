@@ -49,8 +49,8 @@
 #     A THIRD INSTRUMENT is not what arrived 2026-09-22 -- the Bash tool did. The rule
 #     routed on the write TOOLS and denied on `tool_input.file_path`, and a Bash call
 #     carries no such key, so the rule was undefined for it and the gate never saw the
-#     edit. Measured (bd er-effects-rs-wuij): a `for c in ...; do sed -i ... crates/$c/src/config.rs;
-#     done` rewrote four crate sources with no measurement behind it, and the very next
+#     edit. Measured: a `for c in ...; do sed -i ... crates/$c/src/config.rs; done`
+#     rewrote four crate sources with no measurement behind it, and the very next
 #     Edit-tool call adding a `pub fn` to the four `lib.rs` files beside them was refused.
 #     Same change, same files, two different answers, decided by which tool typed it. The
 #     description above says every carve-out is a door and the failure it exists to stop
@@ -135,7 +135,7 @@ proven if {
 # are each already committed, so there is no new behaviour for an instrument to measure, and the
 # measurement those commits needed was spent when they were made.
 #
-# Measured 2026-10-07: `git rebase --onto feat/npc-summons-lab-facts d23bb905 HEAD` stopped on
+# Measured 2026-10-07: `git rebase --onto <branch> <base> HEAD` stopped on
 # `crates/er-npc-summons/src/addr.rs`, and the Edit deleting the conflict markers was refused with
 # `UNPROVEN spent-by-commit` -- a refusal to replay work that had already passed this gate.
 #
@@ -240,7 +240,7 @@ read_only_tools := {"Read", "Grep", "Glob", "NotebookRead", "WebFetch", "WebSear
 tool_name := object.get(input, "tool_name", "")
 
 # ---------------------------------------------------------------------------
-# THE SAME GATE FROM THE BASH TOOL (2026-09-22, bd er-effects-rs-wuij)
+# THE SAME GATE FROM THE BASH TOOL (2026-09-22)
 #
 # Everything above reads `tool_input.file_path`, which a Bash call does not have. What
 # follows asks the same question of a command's text: does this command WRITE a

@@ -14,7 +14,7 @@ DefineSprite body) the two tag sequences are aligned with SequenceMatcher and
 every delete becomes `new_tag: None`, every replace pairs old/new full
 serialized tag bytes (RecordHeader included). Inserts are rejected -- the edit
 model is remove/replace only. This is the deterministic generator for
-`crates/er-gfx/src/title_05_000_edits.rs` (er-effects-rs-h7x).
+`crates/er-gfx/src/title_05_000_edits.rs`.
 
 Usage:
   python3 scripts/gfx_tag_diff.py A.gfx B.gfx

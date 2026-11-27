@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # The branch to push, defaulting to whatever is checked out. The stack this started as is merged
-# (#433 -> main on 2026-09-12), so there is no base ref to fast-forward any more; what is left is
+# (into main on 2026-09-12), so there is no base ref to fast-forward any more; what is left is
 # the one thing this script was always for -- getting a push through a pre-push hook that runs the
 # whole gate suite, without a foreground shell sitting on it.
 branch="${1:-$(git rev-parse --abbrev-ref HEAD)}"

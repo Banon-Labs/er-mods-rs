@@ -727,7 +727,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
         }
         return ret;
     }
-    // Scope the blanket product msgbox suppression to the sensitive windows only (er-effects-rs-qwj):
+    // Scope the blanket product msgbox suppression to the sensitive windows only:
     // boot autoload (pre-world -- connection-error / EULA / warning popups) and an active
     // System->Quit->Load-Profile switch (any stray ProfileSelect load-confirm). Do not suppress during
     // free in-world play: the user's own menu confirmations -- notably the Quit Game / Return-to-Desktop

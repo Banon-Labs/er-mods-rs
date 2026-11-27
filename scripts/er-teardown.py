@@ -166,8 +166,8 @@ def _has_appid(entry: str) -> bool:
     return any(needle in environ for needle in APPID_NEEDLES)
 
 
-def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
-    """Block until every pid in `pids` has exited, or `timeout_ms` elapses. True if all exited.
+def still_running(pids: list[int], timeout_ms: int) -> set[int]:
+    """Block until every pid in `pids` has exited, or `timeout_ms` elapses. Returns the ones left.
 
     Uses `pidfd_open` + `poll`, which is the readiness primitive for this event: a pidfd becomes
     readable exactly when its process dies, including for processes that are not our children.
@@ -175,22 +175,34 @@ def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
     already gone) and less reliable (it races when the process needs longer than the interval),
     which is why `scripts/check-no-timeouts.py` rejects that form.
 
-    A pid that is already gone, or that we may not open, is treated as exited -- both mean there
-    is nothing left to wait for.
+    "Dies" is the kernel's whole-thread-group test: the pidfd of an exited but unreaped process (a
+    zombie) is readable at once, so a zombie counts as exited here, while a leader in state `Z`
+    whose other threads still run (the 127-thread one `is_zombie` describes) does not.
+
+    A pid that is already gone (ESRCH) is treated as exited. A pid whose pidfd cannot be opened
+    for any other reason (EMFILE, EPERM, no pidfd support) is returned as still running: nothing
+    here can tell whether it exited, and calling it exited would skip its SIGKILL and report a
+    live game as closed. A `timeout_ms` of 0 polls once without blocking.
     """
     poller = select.poll()
     fds: dict[int, int] = {}
+    unknown: set[int] = set()
     for pid in pids:
         try:
             fd = os.pidfd_open(pid, 0)
+        except ProcessLookupError:
+            continue
         except (OSError, AttributeError):
+            unknown.add(pid)
             continue
         fds[fd] = pid
         poller.register(fd, select.POLLIN)
 
     try:
-        remaining_ms = timeout_ms
-        while fds and remaining_ms > 0:
+        remaining_ms = max(timeout_ms, 0)
+        first = True
+        while fds and (first or remaining_ms > 0):
+            first = False
             ready = poller.poll(remaining_ms)
             if not ready:
                 break
@@ -203,7 +215,7 @@ def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
             # would need a clock, and the caller's contract is an upper bound on the wait, which
             # a re-entered poll with the same bound still satisfies for a set that is strictly
             # shrinking.
-        return not fds
+        return set(fds.values()) | unknown
     finally:
         for fd in fds:
             try:
@@ -211,6 +223,14 @@ def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
                 os.close(fd)
             except OSError:
                 pass
+
+
+def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
+    """Block until every pid in `pids` has exited, or `timeout_ms` elapses. True if all exited.
+
+    The all-or-nothing form of [`still_running`].
+    """
+    return not still_running(pids, timeout_ms)
 
 
 def _steam_client_pids() -> set[int]:
@@ -329,6 +349,31 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
         )
     found.sort(key=lambda row: row["pid"])
     return found
+
+
+def survivors(
+    prefix: str = DEFAULT_PREFIX,
+    grace_ms: int = KILL_GRACE_MS,
+    rows: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    """The `survey` rows whose process is still running after up to `grace_ms` of waiting.
+
+    `survey` lists what `/proc` lists, and `/proc` keeps an exited process until its parent reaps
+    it. Counting those rows as survivors failed both `er-run-branch.py --stamp-only` closes on
+    2026-11-23 with "1 prefix process(es) survived the teardown", while `--status` seconds later
+    found none. `launch.sh` ends in `exec env ... me3`, so the pid `er-run-branch.py` spawns is
+    `me3` itself, its own child, which it does not reap while it runs. After SIGTERM that `me3` is
+    a zombie whose comm is still `me3`, so the `LAUNCHER_COMMS` rule kept listing it until
+    `er-run-branch.py` exited and init reaped it.
+
+    So the verdict is the pidfd's, not the listing's: a zombie is dead, a process on its way out
+    gets up to `grace_ms` to finish dying (a wait on its exit, not a sleep), and whatever still
+    runs after that is a real survivor and is returned. `rows` judges a given list instead of a
+    fresh `survey(prefix)`.
+    """
+    listed = survey(prefix) if rows is None else rows
+    left = still_running([int(row["pid"]) for row in listed], grace_ms)
+    return [row for row in listed if int(row["pid"]) in left]
 
 
 def is_zombie(pid: int) -> bool:
@@ -566,8 +611,10 @@ def teardown(
 
     wait_for_exit([int(row["pid"]) for row in targets], TERM_GRACE_MS)
 
-    survivors = survey(prefix)
-    for row in survivors:
+    # Only what is still running: an exited process its parent has not reaped yet is still listed
+    # by `survey` and needs no signal (see `survivors`).
+    killed = survivors(prefix, grace_ms=0)
+    for row in killed:
         try:
             os.kill(int(row["pid"]), signal.SIGKILL)
             if verbose:
@@ -576,9 +623,9 @@ def teardown(
             pass
 
     # Wait on the exits themselves rather than on a clock, so the final report cannot list a
-    # process that is already gone (nor miss one that is not).
-    wait_for_exit([int(row["pid"]) for row in survivors], KILL_GRACE_MS)
-    remaining = survey(prefix)
+    # process that is already gone (nor miss one that is not). Judged by exit, not by listing, for
+    # the same reason as above.
+    remaining = survivors(prefix, grace_ms=KILL_GRACE_MS)
 
     # Again, now that everything is gone. SIGTERM can reach the DLL's own exit hooks, which
     # rewrite this file with an exit code that on this target diagnoses nothing -- a normal quit
@@ -723,6 +770,95 @@ def selftest() -> int:
         "waiting on a LIVE pid times out rather than reporting it gone",
         wait_for_exit([os.getpid()], 50) is False,
     )
+    check(
+        "a zero budget polls once and still reports a live pid as running",
+        still_running([os.getpid()], 0) == {os.getpid()},
+    )
+    real_pidfd_open = os.pidfd_open
+
+    def refused_pidfd_open(pid: int, flags: int = 0) -> int:
+        raise PermissionError(1, "Operation not permitted")
+
+    os.pidfd_open = refused_pidfd_open
+    try:
+        refused = still_running([os.getpid()], 0)
+    finally:
+        os.pidfd_open = real_pidfd_open
+    check(
+        "a pid whose pidfd cannot be opened (EPERM) is still running, not exited",
+        refused == {os.getpid()},
+    )
+    # The `--stamp-only` false survivor of 2026-11-23, reproduced with real processes. Each child
+    # is this interpreter run under the name `me3`, so its comm is `me3` and the `LAUNCHER_COMMS`
+    # rule lists it exactly as it lists the `me3` that `launch.sh` execs into; and each is our
+    # unreaped child, as that `me3` is `er-run-branch.py`'s. Only rows naming these pids are
+    # judged, so a real `me3` running beside the selftest is neither waited on nor reported.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as raw:
+        me3 = os.path.join(raw, "me3")
+        os.symlink(sys.executable, me3)
+        no_prefix = os.path.join(raw, "no-prefix")
+        children: list[subprocess.Popen] = []
+
+        def launcher_child() -> subprocess.Popen:
+            # Blocks on stdin, so closing its stdin is the request to exit, like a SIGTERM.
+            child = subprocess.Popen(
+                [me3, "-c", "import sys; sys.stdin.read()"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            children.append(child)
+            return child
+
+        def rows_for(pid: int) -> list[dict[str, object]]:
+            return [row for row in survey(no_prefix) if row["pid"] == pid]
+
+        try:
+            exited = launcher_child()
+            exited.stdin.close()
+            wait_for_exit([exited.pid], KILL_GRACE_MS)
+            listed = rows_for(exited.pid)
+            check(
+                "an exited, unreaped `me3` child is still listed by survey (what the old check counted)",
+                [row["state"] for row in listed] == ["Z"],
+            )
+            check(
+                "that zombie is not a survivor",
+                survivors(no_prefix, grace_ms=KILL_GRACE_MS, rows=listed) == [],
+            )
+
+            # The race itself: listed while it is being asked to go, judged after. Survey lists it
+            # whether it is still running or already a zombie, because nothing has reaped it.
+            exiting = launcher_child()
+            listed = rows_for(exiting.pid)
+            exiting.stdin.close()
+            check(
+                "a `me3` on its way out is listed at the moment it is asked to exit",
+                len(listed) == 1,
+            )
+            check(
+                "it is waited for, not reported as a survivor",
+                survivors(no_prefix, grace_ms=KILL_GRACE_MS, rows=listed) == [],
+            )
+
+            running = launcher_child()
+            listed = rows_for(running.pid)
+            check(
+                "a `me3` that really keeps running is still reported as a survivor",
+                [row["pid"] for row in survivors(no_prefix, grace_ms=50, rows=listed)]
+                == [running.pid],
+            )
+        finally:
+            for child in children:
+                if child.stdin and not child.stdin.closed:
+                    child.stdin.close()
+            wait_for_exit([child.pid for child in children], KILL_GRACE_MS)
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait()
     # Structural, not textual. Three earlier checks in this file scanned the source for a literal
     # and each matched the check's own text, reporting fail against a file that was correct. The
     # module simply does not import `time`; if a sleep is ever reintroduced it must import it, and

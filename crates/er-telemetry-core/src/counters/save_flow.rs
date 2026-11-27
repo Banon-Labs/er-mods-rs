@@ -202,8 +202,8 @@ pub static SAVE_PICKER_SYSTEM_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// surface has to re-show its Save-As after a declined overwrite.
 pub static SAVE_DEST_OPEN_PICKER_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// Times the menu pump tried to open the destination browser and left the request armed because no
-/// picker ran (a MenuJob the dialog's queue deferred). The direct oracle for the reopen loop of bd
-/// `er-effects-rs-rsxi`: a picker that ran -- including one the user cancelled -- discharges the
+/// picker ran (a MenuJob the dialog's queue deferred). The direct oracle for the reopen loop:
+/// a picker that ran -- including one the user cancelled -- discharges the
 /// request, so with the OS surface active this must read 0. Any positive value there means a
 /// terminal outcome was retried, which is the loop that trapped the user.
 pub static SAVE_DEST_PICKER_OPEN_RETRY_COUNT: AtomicUsize = AtomicUsize::new(0);

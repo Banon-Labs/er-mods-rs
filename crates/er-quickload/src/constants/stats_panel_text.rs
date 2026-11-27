@@ -19,7 +19,7 @@
 /// row-populate does after each field.
 pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = er_game_base::rva::CSSCALEFORMVALUE_DTOR_RVA;
 /// SceneObjProxy layout, corrected 2026-07-04 from the Ghidra dump structures + `ComponentProxy::
-/// ComponentProxy` (dump 0x1407331b0) after the er-effects-rs-7e7 crash: +0x00 vfptr, +0x08/+0x10/
+/// ComponentProxy` (dump 0x1407331b0) after the stats-panel crash: +0x00 vfptr, +0x08/+0x10/
 /// +0x18 an intrusive component-link node (ctor initializes all three to `self`; the resolve links
 /// the live component object in), +0x20 context, +0x28 the embedded `CSScaleformValue` (0x38 bytes:
 /// vfptr + GFx::Value). The old claim that the CSScaleformValue sits at +0x8 was wrong -- +0x8 is
@@ -88,7 +88,7 @@ pub(crate) use er_telemetry_core::counters::PROFILE_PLAYER_NAME_PUSH_FAILURES;
 /// Count of slot names decoded from the live `.sl2` cache.
 pub(crate) use er_telemetry_core::counters::PROFILE_SLOT_NAMES_DECODED;
 /// Count of pushes skipped fail-closed because the resolved component at proxy+0x8 was not a live
-/// image-vtabled object (er-effects-rs-7e7: a stale/garbage-vt component here crashed the native
+/// image-vtabled object (a stale/garbage-vt component here crashed the native
 /// SetText wrapper's unvalidated `call *0x8(vt)` dispatch). Distinct from PUSH_FAILURES so telemetry
 /// separates "field missing / SetText rejected" from "component stale -- crash avoided" (oracle).
 pub(crate) use er_telemetry_core::counters::PROFILE_STATS_PUSH_STALE_SKIPS;

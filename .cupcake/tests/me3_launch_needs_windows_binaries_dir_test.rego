@@ -229,3 +229,15 @@ test_allow_other_tool if {
 	}
 	count(denials) == 0
 }
+
+# --- exec launchers in front of me3 (2026-11-19) ------------------------------
+# Allowed until this date, measured with `opa eval`: the launcher was read as the program.
+test_deny_me3_launch_behind_a_launcher if {
+	denied("chrt --idle 0 me3 launch --auto-detect -p x.me3")
+	denied("taskset -c 0-3 me3 launch -g eldenring -p x.me3")
+	denied("ionice -c idle /home/banon/.local/bin/me3 launch --auto-detect -p x.me3")
+}
+
+test_allow_launched_me3_named_in_an_operand if {
+	allowed("echo chrt --idle 0 me3 launch --auto-detect -p x.me3")
+}

@@ -1,7 +1,7 @@
 //! Native-Windows loading-experience overlay: a SEPARATE top-level window with our OWN D3D12 device and
 //! swapchain, layered on top of the game to own what the user sees during boot + every loading screen.
 //!
-//! Why (bd er-effects-rs-8jz, er-effects-rs-n4x). On the strict native AMD D3D12 driver, compositing on
+//! Why: on the strict native AMD D3D12 driver, compositing on
 //! the game's shared device (creating resources + submitting command lists that race the game's own async
 //! rendering) crashes at every phase -- proven across 17 native-Windows runs. vkd3d/Proton isolates the
 //! shared-device work; native Windows does not. So on native Windows we do not touch the game's device.

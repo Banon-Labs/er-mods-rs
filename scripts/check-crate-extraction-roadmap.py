@@ -19,7 +19,7 @@ the total is refused, and `--refresh` accepts growth in one command. The value i
 growth is impossible; it is that growth becomes a reviewable diff to the ledger instead of
 the invisible default.
 
-Why growth, not equality: measured across the four commits of PR #367, 62% of 1,553 added
+Why growth, not equality: measured across the four commits of one change, 62% of 1,553 added
 lines already landed in extracted crates with no enforcement at all, because the host-seam
 pattern pulls them there. The leak that pattern does not catch is a new module born inside
 the shim -- `experiments/continue_load/picked_summary_refresh.rs` arrived as 187 fresh lines
@@ -402,7 +402,7 @@ def refresh(roadmap: Path = ROADMAP, root: Path = SOURCE) -> int:
     if and only if the file exists, with an exact line count, and the total row must match
     (file count, summed lines). So there is no judgement to apply and the refresh is mechanical,
     which is exactly why it belongs in the tool rather than in an ad-hoc script written from
-    scratch each time. It had been hand-refreshed at least three times (PR #301 and twice during
+    scratch each time. It had been hand-refreshed at least three times (once in a pull request and twice during
     the 2026-08-21 lint-parity sweep, where any edit that adds or removes a line silently rots
     the gate) before this mode existed.
 
@@ -463,10 +463,10 @@ def main() -> int:
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument(
         "--refresh",
-        # `--write` is the name PR #358 gave this mode while the ratchet was being built on an
-        # older copy of this file; the merge of the two kept `--refresh` as canonical. The alias
-        # costs one line and means a command someone already has in their shell history does not
-        # silently become an argparse error.
+        # `--write` is the name a parallel change gave this mode while the ratchet was being built
+        # on an older copy of this file; the merge of the two kept `--refresh` as canonical. The
+        # alias costs one line and means a command someone already has in their shell history does
+        # not silently become an argparse error.
         "--write",
         action="store_true",
         dest="refresh",

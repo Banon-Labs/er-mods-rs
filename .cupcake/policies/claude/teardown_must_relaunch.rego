@@ -42,15 +42,14 @@ tool_command := object.get(input.tool_input, "command", "")
 # `no_whole_check_sh` records at length: matching the whole command string asks whether
 # two tokens are CO-PRESENT, not whether either one runs.
 #
-# That is not a theoretical distinction here. Measured 2026-09-21 (bd er-effects-rs-ak3q,
-# bd er-effects-rs-if5l): `git commit -F - <<EOF ... EOF` was refused because the commit
-# message described this guard and named the script, and `bd create --description "..."`
-# was refused because the issue text did. The issue reporting the second one had to be
-# filed through a body file written by a separate command in order to exist at all, and the
-# commit message had to be reworded to say "a repo-relative teardown command" instead of
-# naming the file. Rewording a commit message or an issue body to appease a matcher
-# degrades the record this guard is not there to police, and the invoked binary in both
-# cases was `git` and `bd`.
+# That is not a theoretical distinction here. Measured 2026-09-21:
+# `git commit -F - <<EOF ... EOF` was refused because the commit message described this
+# guard and named the script, and `bd create --description "..."` was refused because the
+# issue text did. The issue reporting the second one had to be filed through a body file
+# written by a separate command in order to exist at all, and the commit message had to be
+# reworded to say "a repo-relative teardown command" instead of naming the file. Rewording
+# a commit message or an issue body to appease a matcher degrades the record this guard is
+# not there to police, and the invoked binary in both cases was `git` and `bd`.
 executed_texts := commands.input_executed_texts
 
 # Whitespace-normalized, so a command written across lines matches the same way in
@@ -134,13 +133,18 @@ killing_teardown if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_teardown(word)
-	commands.word_in_command_slot(words, index)
+	# Behind an exec launcher too: `chrt --idle 0 python3 scripts/er-teardown.py` killed the
+	# game unexamined until 2026-11-19. See "EXEC LAUNCHERS" in `.cupcake/system/commands.rego`.
+	commands.launched_word_in_command_slot(words, index)
 	not next_word(words, index) in read_only_flags
 }
 
 # Flags that make the script kill nothing. `--status` reports; `--help`/`-h` are argparse's,
 # which prints usage and exits inside `parse_args()` before any teardown code runs.
-read_only_flags := {"--status", "--help", "-h"}
+# `--selftest` returns from `main()` before the status and teardown branches, and the selftest
+# signals only children it spawned itself; it was refused on 2026-11-23 while proving a change
+# to `survivors`, which left the script's own test unrunnable.
+read_only_flags := {"--status", "--help", "-h", "--selftest"}
 
 # The word after `index`, or the empty string when the invocation ends the text. Spelled
 # with `else` because a bare `words[index + 1]` is undefined past the end, and an undefined
@@ -157,7 +161,7 @@ runs_teardown if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_teardown(word)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 invokes_run_branch if {
@@ -165,7 +169,7 @@ invokes_run_branch if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_run_branch(word)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 invokes_user_launcher if {
@@ -173,7 +177,7 @@ invokes_user_launcher if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_user_launcher(word)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 # The relaunch that has to ride along. `er-run-branch.py` is the sanctioned

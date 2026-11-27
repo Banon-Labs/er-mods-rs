@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 // Loading-screen character-stats block on the native-Windows isolated overlay.
 //
-// Ports the existing game-menu-font loading-screen stats (er-effects-rs-jsm) onto the separate-window
+// Ports the existing game-menu-font loading-screen stats onto the separate-window
 // overlay so native Windows shows the stats the user expects: the game's own menu font (MenuFont_01 via
 // `er_gfx::raster::RasterFont`, captured from the game's `font.gfx`), the same on-screen size
 // (`em_px = screen_max * 48/2056`), and the same location (top-left at 5% width / 60% height -- the exact

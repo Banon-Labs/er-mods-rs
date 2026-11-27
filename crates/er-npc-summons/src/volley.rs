@@ -1,7 +1,7 @@
 //! Permission to throw: `LAB_WORLD.tt_volley`, `tt_volley_hp`, `tt_volley_cats` and
 //! `tt_volley_human`, read by the turtles' brain before a throwable volley.
 //!
-//! A port of the lab's `volleyCheck` (`scripts/frida/spawn-npc.js` on `feat/ai-lab-turtles`; user
+//! A port of the lab's `volleyCheck` (`scripts/frida/spawn-npc.js`; user
 //! rule 2026-10-06): the player has held lock-on on the same living enemy for [`VOLLEY_LOCK_MS`].
 //! The lock-on target is `PlayerIns+0x6b0`, a handle (`scripts/frida/target-bars-probe.js`). While
 //! it holds, `tt_volley` is 1 and `tt_volley_hp` is the enemy's HP; a turtle throws only when its

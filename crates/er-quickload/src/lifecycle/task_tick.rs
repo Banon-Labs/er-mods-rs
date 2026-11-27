@@ -50,7 +50,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // in-world play. The can-move probe already scopes its own contamination handling to its brief injection
     // interval (MOVE_PROBE_ACTIVE) and detects (not blocks) any user contamination, so no product-wide
     // keyboard disable belongs here. The user's keyboard is now fully live throughout the dwell.
-    // Native-Windows loading overlay ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
+    // Native-Windows loading overlay ownership cycle: our separate-window overlay
     // owns the screen (show) whenever the local player is absent -- boot, title, and every loading screen
     // (fast-travel, area transitions, death re-load) -- and releases it (hide) once the world is loaded and
     // the player exists. This re-owns automatically on each subsequent load. Cheap per-frame check; the
@@ -111,7 +111,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
                     Err(_) => true,
                 });
         NATIVE_OVERLAY_SHOW.store(usize::from(owns_surface), Ordering::SeqCst);
-        // Native-Windows save PICKER input (bd er-effects-rs-8wt): the picker list already renders
+        // Native-Windows save PICKER input: the picker list already renders
         // via the overlay's shared boot_view_render_frame (overlay_save_picker_onto), but the Wine
         // build drives the picker's input from the D3D12 Present hook -- which never installs on native
         // Windows (composite suppressed on the game device). Drive it here on the game task instead:
@@ -126,7 +126,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // (the gamepad edge-detection state is shared). catch_unwind matches the Present-hook call site.
         let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
         let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
-        // Loading-screen character stats (bd er-effects-rs-rbc): build the game-menu-font stats lines on
+        // Loading-screen character stats: build the game-menu-font stats lines on
         // the game thread (safe guarded reads of ProfileSummary/PlayerGameData) into STATS_TEXT_CACHE, so
         // the isolated overlay's render thread can re-raster them at screen scale and composite them at the
         // expected loading-screen location (5%/60%, game MenuFont). Content-keyed + self-gates on a captured
@@ -191,7 +191,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
     if let Ok(base) = game_module_base() {
         unsafe { try_install_game_present_hook(base) };
-        // GPU-frame TIMESTAMP oracle (goal §3.3 gpu_frame_us; bd er-effects-rs-03ma): once the present
+        // GPU-frame TIMESTAMP oracle (goal §3.3 gpu_frame_us): once the present
         // hook is up, piggyback timestamp command-lists onto the game queue's ExecuteCommandLists to
         // measure per-frame GPU-busy time (splits the reload-20fps residual into GPU-render vs
         // present-wait). One-shot, self-gated (Wine + telemetry-measurement only), fail-closed.
@@ -240,7 +240,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // passthrough unless armed by our own load trigger, so it never affects normal gameplay map
     // transitions; when armed it substitutes a valid saved-map BlockId so the game builds the world-res
     // loadlist path and the load completes + renders instead of stalling at WorldResWait (bd
-    // er-effects-rs-um9g / render-handoff-freeze-worldreswait-loadlist-root-2026-07-18).
+    // render-handoff-freeze-worldreswait-loadlist-root-2026-07-18).
     install_request_move_map_fix_hook();
     // Armed switch-reload dip fix (bd reload-overlap-fix-design-worldreswait-defer-release-on-streaming-
     // settle-2026-07-24): install the STEP_WorldResWait gate (0x140625ed0; 1.16.2 FUN_140624bd0) defer-release detour once. It
@@ -326,7 +326,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // flow, so the rows actually build. A direct registrar self-fire (maybe_auto_open_menu)
     // only posted the chain; the native update does not drain a chain it did not open, so
     // the rows never built (continue-scan = 0 nodes, stage 3). Zero-input (decoded accept
-    // flag, not a synthesized event). bd er-effects-rs-e9e + rowbuild-mechanism-incontext-
+    // flag, not a synthesized event). bd rowbuild-mechanism-incontext-
     // openmenu-2026-06-23.
     //
     // The install and the two presses are two different questions, and reading them as one is
@@ -367,7 +367,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // Title transition fast-forward (pab_dismiss -> menu_open): scale the title
     // frame-delta so the FadeIn/TextFadeOut/menu Scaleform animation reaches its end
     // frame in fewer wall-clock frames. Default-on product behavior for real runs (the
-    // detour self-gates per frame); install once. bd er-effects-rs-urw.
+    // detour self-gates per frame); install once.
     if title_anim_speedup_enabled()
         && let Ok(base) = game_module_base()
     {
@@ -383,7 +383,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             unsafe { install_movemapstep_step_move_map_gate_hook(base) };
         }
         // STEP_MoveMap_Update finalize-defer detour: the root fix for the warm-reload premature
-        // teardown (bd er-effects-rs-9fmm). Self-gated internally on the er-quickload-reload-defer.txt
+        // teardown. Self-gated internally on the er-quickload-reload-defer.txt
         // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
         unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
         // Child-done-query override: prevent the premature MoveMapStep child teardown that strands
@@ -401,7 +401,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // "Cannot connect to network / connection lost" MessageBoxDialogs our offline boot
     // raises at menu-open -- short-circuit at their `IsInOnlineMode() &&
     // IsServerConnectionEnabled()` guard before enqueuing any popup. Gated by the offline
-    // flag (this only forces state the offline boot already intends). bd er-effects-rs-0ye.
+    // flag (this only forces state the offline boot already intends).
     if online_disable_enabled() {
         // Milestone-3 FIX: short-circuit the offline title-flow check jobs to their
         // no-modal exits so the title flow never enqueues a GR_System_Message MessageBox.
@@ -418,7 +418,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // build against the picked save (enabled) instead of an empty ProfileSummary. Partners the
     // ShowProgressJob save-check hold above; installed unconditionally because the hook self-gates on
     // `missing_save_selection_pending()` (pass-through on an early pick / no picker). Must arm before
-    // the native auto-menu-open (~+38s). Fixes the late-pick softlock (bd er-effects-rs-ns4n follow-up).
+    // the native auto-menu-open (~+38s). Fixes the late-pick softlock.
     install_title_open_menu_suppress_hook();
     // Diagnostic (gated by er-quickload-grsysmsg-log.txt): log the GR_System_Message ids the
     // title flow fetches after menu-open, to definitively name the menu-open MessageBoxDialogs

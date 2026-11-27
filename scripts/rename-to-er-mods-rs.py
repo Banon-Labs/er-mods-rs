@@ -17,7 +17,7 @@ let an earlier rewrite feed a later rule), with the context baked into the token
 Three classes must survive unchanged, and are identity-mapped so the alternation matches them
 first and rewrites them to themselves:
 
-  1. Beads issue IDs (`er-effects-rs-wncc`). Database keys for 2500+ memories and 100 issues.
+  1. Beads issue IDs (`er-effects-rs-<id>`). Database keys for 2500+ memories and 100 issues.
      Renaming them orphans every cross-reference in the tree and in the Dolt database, which
      this pass does not touch.
   2. `er_effects_union_register`. The cross-DLL hook-union export, resolved by name through

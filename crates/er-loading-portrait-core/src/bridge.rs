@@ -73,8 +73,8 @@ pub use er_telemetry_core::counters::PROFILE_LIVE_FEED_LOGGED;
 // gross-mismatch bar, its tear score, `apply_depth_alpha_key`'s own degenerate-mask rejection).
 // This predicate exists for the one case none of them can see: a buffer the depth key never touched.
 
-/// Minimum percent of transparent pixels a frame's mask must cut for the frame to count as keyed
-/// (er-effects-rs-hi2): a real portrait mask removes a large background share; a partial mask
+/// Minimum percent of transparent pixels a frame's mask must cut for the frame to count as keyed:
+/// a real portrait mask removes a large background share; a partial mask
 /// (few cut pixels on an opaque IBL box) previously passed "any transparent pixel" and displayed
 /// as an unmasked head. 5% is far below any real mask's share and far above the partial band.
 ///

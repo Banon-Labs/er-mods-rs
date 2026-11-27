@@ -73,15 +73,15 @@ pub struct PortraitHost {
     pub best_active_slot: unsafe fn() -> i32,
     /// The slot this boot is configured to autoload (`er-quickload.toml` / its per-run sidecar),
     /// or `None` when nothing configured one. A hint, never an observation -- the portrait window
-    /// deliberately refuses it (bd b1d6). The stats panel takes it only ahead of
+    /// deliberately refuses it. The stats panel takes it only ahead of
     /// `best_active_slot`, whose answer is the highest-level slot and is unrelated to the load.
     pub configured_autoload_slot: fn() -> Option<i32>,
     /// Populate the per-slot stats cache from the on-disk `.sl2` (once per session).
     pub ensure_profile_slot_stats_cached: unsafe fn(usize) -> bool,
     /// The name of the character in save `slot` as decoded from the container's slot body, or
     /// `None`. Body-derived on purpose: the live record is filled from the container's
-    /// `USER_DATA010` table, which can name a different character than the body that loads
-    /// (bd er-effects-rs-ccud). Same cache as the attributes below.
+    /// `USER_DATA010` table, which can name a different character than the body that loads.
+    /// Same cache as the attributes below.
     pub profile_slot_name: fn(i32) -> Option<String>,
     /// The Rune Level of the character in save `slot` from the same body-derived cache as
     /// [`Self::profile_slot_name`], or `None`.
@@ -91,7 +91,7 @@ pub struct PortraitHost {
     /// The stored effective max vitals `[hp, fp, stamina]` of the character in save
     /// `slot` (the save's `MaxHealth`/`MaxFP`/`MaxSP` == runtime `current_max_*`),
     /// or `None` when the slot is empty/unreadable. Same `.sl2` cache as the
-    /// attributes; values are read, never derived (bd er-effects-rs-qic7).
+    /// attributes; values are read, never derived.
     pub profile_slot_vitals: fn(i32) -> Option<[u32; 3]>,
     /// The highest weapon upgrade level (`matchmakingWeaponLevel`) of the character in
     /// save `slot`, or `None` when the slot is empty/unreadable or the byte is

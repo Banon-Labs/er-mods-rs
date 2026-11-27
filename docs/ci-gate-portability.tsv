@@ -147,6 +147,8 @@ portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py	source/AST/text analysis only, plus git ls-files/show in the checkout itself	lint
 portable	-	check-color-spelling.py --selftest	synthetic counts plus a throwaway git repo in a temp dir; reads the committed baseline	lint
 portable	-	check-color-spelling.py	text count over git ls-files in the checkout itself	lint
+portable	-	check-no-tracker-refs.py --selftest	synthetic comments plus a throwaway git repo in a temp dir	lint
+portable	-	check-no-tracker-refs.py	comment scan over git ls-files in the checkout itself	lint
 portable	-	check-overlay-theme.py --selftest	synthetic crates written under a temp dir	lint
 portable	-	check-overlay-theme.py	source text of crates/*/src and crates/*/Cargo.toml, and the baseline	lint
 partial	luac5.1	check-ai-lua-dialect.py --selftest	scanner cases and the `#` tree case still assert; prints that the luac syntax-error case was not exercised	lint
@@ -281,6 +283,7 @@ portable	-	test-pre-push-dirty-tree.sh	builds its own single-branch repo under m
 portable	-	test-pre-push-gates-pushed-ref.sh	builds its own two-commit repo under mktemp with every gate stubbed, drives the real hook with a ref list on stdin, and lets it pin its gate worktree inside that fixture	suite
 portable	-	test-pre-push-green-cache.sh	builds its own repo under mktemp with every gate stubbed and drives the real hook; markers land in that fixture's own git directory	suite
 portable	-	test-pre-push-authorized-teardown.sh	builds its own repo under mktemp with every gate and er-teardown.py stubbed, points the run root at the fixture, and drives the real hook; no game is looked at or touched	suite
+portable	-	test-pre-push-agent-worktree-ledger.sh	builds its own repo under mktemp at a path ending .claude/worktrees/agent-*, copies in check.sh, the ledger and their gate scripts, stubs the earlier gates, and drives the real hook; touches no repo but its own	suite
 portable	-	test-er-push-watched-ref-carries-work.sh	builds its own bare remote plus working clone under mktemp; every fetch and push names that fixture, so it needs no network and no origin/main	suite
 portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1	suite
 portable	-	check-save-disable-warnings.py	lint-checks two crates with cargo-xwin under the check profile, after the cargo xwin check warm-up step before it	cargo-build
@@ -304,6 +307,26 @@ portable	-	test-push-authorization-signal.py	fixture transcripts and a throwaway
 portable	-	test-commit-authorization-signal.py	fixture transcripts in a temp dir; the cupcake end-to-end cases skip when cupcake is absent	policy
 portable	-	test-unexplained-running-tasks-signal.py	source/AST/text analysis only	policy
 portable	-	test-untailed-long-run-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
+portable	-	cupcake_ci_running_claim.py --selftest	transcript events built in memory and fixture transcripts in a temp dir; no game image, no network	policy
+portable	-	cupcake_red_stage_watch.py --selftest	transcript events built in memory; no game image, no network	policy
+portable	-	test-unclosed-finished-agents-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME, 5 s)	policy
+portable	-	cupcake_session_tasks.py --selftest	a fake process table and session transcripts in a temp dir; never reads /proc or ~/.claude (measured with an empty HOME, 4 s)	policy
+portable	-	test-session-tasks-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME, 8 s)	policy
+portable	-	cupcake_unmeasured_estimate.py --selftest	classifier cases held in the script; source/text only (--replay, which reads ~/.claude, is not run here)	policy
+portable	-	test-unmeasured-estimate-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME, 7 s)	policy
+portable	-	cupcake_task_stop_waiting_agent.py --selftest	notification cases held in the script; source/text only	policy
+portable	-	test-task-stop-waiting-agent-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME, 5 s)	policy
+portable	-	cupcake_rego_compile_check.py --selftest	command parsing cases held in the script; source/text only	policy
+portable	-	test-rego-compile-check-signal.py	copies .cupcake into a temp dir and runs opa check on it; needs the cupcake and opa binaries, no game (measured with an empty HOME, 26 s)	policy
+portable	-	test-untailed-agent-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME and no kitty, 7 s)	policy
+portable	-	kitty-tail-agent.py --selftest	a fake session in a temp dir; checks the kitty launch argv without sending it (measured with an empty HOME and no kitty, 4 s)	policy
+portable	-	cupcake_markdown_rule.py --selftest	classifier cases held in the script; source/text only (--replay, which reads ~/.claude, is not run here)	policy
+portable	-	test-markdown-rule-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
+portable	-	cupcake_correction_first.py --selftest	classifier and turn cases held in the script; source/text only (measured with an empty HOME, under 1 s)	policy
+portable	-	test-correction-first-signal.py	drives the Stop and UserPromptSubmit signal scripts over transcripts and hook events it writes to a temp dir; source/text only (measured with an empty HOME, 2 s)	policy
+portable	-	test-cupcake-correction-classifier.py	scores the classifier on the committed corpus .cupcake/tests/corpus/correction_prompts.jsonl; never reads ~/.claude (measured with an empty HOME, under 1 s)	policy
+portable	-	cupcake_filed_not_started.py --selftest	classifier cases held in the script; source/text only (measured with an empty HOME, under 1 s)	policy
+portable	-	cupcake_negated_opener.py --selftest	classifier cases held in the script; source/text only (measured with an empty HOME, under 1 s)	policy
 portable	-	test-inline-user-command-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-authorize-run-stamp-signal.py	a throwaway git repo with fixture run-root and game-dir logs, plus this checkout's own HEAD and worktree list; no game, no network	policy
 portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against a throwaway profile; needs opa, no game	policy

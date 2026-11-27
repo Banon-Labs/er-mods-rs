@@ -1,0 +1,3 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "how is the kit run going?"}]}}
+
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "I'm holding the timestamp, time-estimate and Golden Land patches until the read-back finishes."}]}}

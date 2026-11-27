@@ -57,7 +57,7 @@ pub use er_telemetry_core::counters::DEPTH_KEY_APPLIED;
 /// A plausible portrait cutout is a large minority/majority of the frame (bg dominates a centered head).
 pub use er_telemetry_core::counters::DEPTH_KEY_BG_PCT;
 /// Frames whose fresh depth was degenerate for masking (no histogram gap, or a mask cutting under the
-/// publish floor). Throttles the recurring depth diagnostic (er-effects-rs-hi2: a whole window sat in
+/// publish floor). Throttles the recurring depth diagnostic (a whole window sat in
 /// the lowmask band and the one-shot diag from boot left it invisible). `oracle_depth_key_degenerate`.
 pub use er_telemetry_core::counters::DEPTH_KEY_DEGENERATE;
 /// One-shot `depth-key` diagnostic latch (logs corner/center/min/max depth + masked fraction once).
@@ -116,7 +116,7 @@ pub use er_telemetry_core::counters::PROFILE_PORTRAIT_INCARNATION;
 /// (mask==0) vs the colour's own head (pixels far from the background colour). A correct mask keeps the
 /// head -> high IoU; a fresh mask of a wrong depth silhouette (stale depth content on the new character)
 /// keeps a region that does not match this head -> low IoU. For dark characters whose colour-head is a
-/// sliver (Sacred Bean, er-effects-rs-y134) the score is head-coverage instead of symmetric IoU -- see
+/// sliver (Sacred Bean) the score is head-coverage instead of symmetric IoU -- see
 /// `mask_head_iou`. `_last` is an oracle; `_total` counts gross
 /// mismatches; a sustained gross mismatch (streak) abort()s during the repro so the run stops fast.
 pub const MASK_HEAD_IOU_MIN: usize = 25;

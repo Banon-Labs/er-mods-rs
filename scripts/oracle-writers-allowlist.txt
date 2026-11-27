@@ -1,5 +1,5 @@
-# Counters that are READ to emit telemetry but written NOWHERE -- known debt, tracked by
-# er-effects-rs-56fx. Enforced by scripts/check-oracle-writers.py.
+# Counters that are READ to emit telemetry but written NOWHERE -- known debt. Enforced by
+# scripts/check-oracle-writers.py.
 #
 # THIS LIST MAY ONLY SHRINK. The checker fails on any offender NOT listed here, so no new one can
 # land; it ALSO fails on any name listed here that is no longer an offender, so fixing a counter is
@@ -13,7 +13,7 @@
 # feature that ran and did nothing, which is how oracle_title_overlay_cover_render_calls=0 was once
 # cited as proof the title cover painted no pixels.
 #
-# Classification evidence already gathered (see er-effects-rs-56fx for the full notes):
+# Classification evidence already gathered:
 #   RAWINPUT_BLOCKED_UNFOCUSED_EVENTS       DELETE -- input_block.rs:806-816 records that the
 #                                           unfocused keyboard drop was deliberately removed; this
 #                                           counts a behaviour that no longer exists.
@@ -21,8 +21,9 @@
 #                                           'blocked_direct_file_mode' arm of the shgfp_decision
 #                                           string (path_hooks.rs). Its siblings ARE written.
 #   MSGBOX_TOTAL_BUILDS                     a DISTINCT dead static from the live
-#                                           oracle_msgbox_total_builds in er-effects-rs-mtq: same
-#                                           name, different counter, no writer.
+#                                           oracle_msgbox_total_builds, which reads
+#                                           MSGBOX_BUILDER_LOG: same name, different counter, no
+#                                           writer.
 
 MSGBOX_TOTAL_BUILDS
 RAWINPUT_BLOCKED_UNFOCUSED_EVENTS

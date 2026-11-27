@@ -222,9 +222,9 @@ impl<'a> SerializedSaveSlot<'a> {
     /// [equipment_param_ids][tail]` while the save serializes `[slot indices][ChrAsmEquipment]
     /// [param ids][handles]` -- a raw copy of the save bytes dresses the portrait from garbage.
     ///
-    /// The three override SENTINELS must be -1, not zero (bd er-effects-rs-wncc -- the real
-    /// entirely-nude root cause). `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) are not padding:
-    /// the model-resource request `FUN_1409e86f0` tests them signed and treats a non-negative value in
+    /// The three override SENTINELS must be -1, not zero (the real entirely-nude root cause).
+    /// `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) are not padding: the model-resource
+    /// request `FUN_1409e86f0` tests them signed and treats a non-negative value in
     /// any of them as a forced whole-outfit override, so a zero-filled image resolves head/chest/hands/
     /// legs to param ids 0/100/200/300 -- rows that do not exist. Nothing renders, including the
     /// bare-body defaults the native feed equips into hands and legs, which is exactly the reported
@@ -699,10 +699,11 @@ mod loading_cover_chr_asm_image_tests {
         )
     }
 
-    /// The fix (bd er-effects-rs-wncc). `FUN_1409e86f0` tests these three signed and treats a
-    /// non-negative value as a forced whole-outfit override, so a zero here resolves the four
-    /// protector slots to 0/100/200/300 and the portrait renders entirely nude -- default underwear
-    /// included. A ctor-built `ChrAsm` holds -1; our hand-built image must too.
+    /// The fix for the entirely-nude portrait: these three sentinels are -1, not zero.
+    /// `FUN_1409e86f0` tests them signed and treats a non-negative value as a forced whole-outfit
+    /// override, so a zero here resolves the four protector slots to 0/100/200/300 and the portrait
+    /// renders entirely nude -- default underwear included. A ctor-built `ChrAsm` holds -1; our
+    /// hand-built image must too.
     #[test]
     fn the_three_whole_outfit_override_sentinels_are_minus_one_not_zero() {
         let body = synthetic_save_body();

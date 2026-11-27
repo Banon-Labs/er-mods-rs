@@ -5458,7 +5458,7 @@ def opponents_from_results(pool_raw, results, fallback=OPPONENT_FALLBACK, opener
     engagement at that family's use share, the opener with its first chained follow-up, the shares
     renormalised over the openers that resolve. `slots_fn(row)` gives a row's slots with the
     synthesized jump openers (`er-builds-pvp.jump_openers`); without it the stored slots alone,
-    which have none, so the jump family drops out (er-effects-rs-8uha). A key the ranking has no
+    which have none, so the jump family drops out. A key the ranking has no
     row for takes `fallback` (no follow-up). Returns (Opponents, matched share, pool-weighted
     means)."""
     openers = openers or OPPONENT_OPENERS
@@ -13309,8 +13309,8 @@ def selftest():
           'EXE 0x140675270')
     check('wepType->flag: Greatsword is colossal', WEP_TYPE_MOUNT_FLAG[t.reg.weapon[greatsword]['wepType']],
           'SwordGigantic', 'EXE 0x140d2cc70 + COMMUNITY class')
-    # er-effects-rs-8uha: the jump family's opener is synthesized, so the stored slots alone drop
-    # it; the shares that remain are renormalised, and a supplied jump opener starts at its
+    # The jump family's opener is synthesized, so the stored slots alone drop it; the
+    # shares that remain are renormalised, and a supplied jump opener starts at its
     # `neutral_in` strike from the jump input, not the landed clip's 2.5 m contact.
     fam_row = {'weapon': 'A', 'two': False,
                'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 0.4},

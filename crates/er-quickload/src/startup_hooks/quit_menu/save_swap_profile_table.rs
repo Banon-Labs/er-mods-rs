@@ -18,7 +18,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
     // made the snapshot a process-lifetime latch: the ProfileSummary allocation is reused across
     // save containers, so a snapshot taken minutes and one container earlier was kept and would
     // have been written back as "the user's real rows" -- the previous character's stats, which is
-    // the remaining half of `er-effects-rs-fmy6`. Re-reading costs one memcpy per pick.
+    // the remaining half of the stale-picker-rows defect. Re-reading costs one memcpy per pick.
     //
     // Where the pre-call records live is the subtlety. The save picker may have its browse-row
     // labels in the live allocation right now (a pick arrives while the picker still owns the

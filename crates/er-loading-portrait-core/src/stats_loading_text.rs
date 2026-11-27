@@ -1,13 +1,13 @@
 use crate::prelude::*;
 
-// === Loading-screen player-stats text (er-effects-rs-jsm) =========================================
+// === Loading-screen player-stats text ============================================================
 //
 // Pivot (user 2026-07-06): rather than fight to layer the head under the native tips, we control the
 // surface -- suppress the native loading tips + "press to advance" key guide, and render our own text
 // (the local character's stats) on top of the head in the Present overlay, using the game'S own menu
 // font via `er_gfx::raster::RasterFont`. The font-independent pieces (the unified line format and the
 // CPU text raster) live in the cross-platform `stats_lines` module so the one-layout-everywhere
-// guarantee is host-tested (bd er-effects-rs-qic7); this module wires the font capture, the stats
+// guarantee is host-tested; this module wires the font capture, the stats
 // read, and the overlay composite around them.
 
 // --- Game menu font: captured at runtime from the game's own Scaleform file-open, or from an env
@@ -148,7 +148,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let record_name = String::from_utf16_lossy(&units[..len]);
     let record_level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
     let map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
-    // Whose name and LEVEL: The body'S, not the record'S (bd er-effects-rs-ccud).
+    // Whose name and LEVEL: The body'S, not the record'S.
     //
     // The record is filled by `CS::ProfileSummary::Deserialize` from the container's `USER_DATA010`
     // table; the character that actually loads comes from the slot body, and a container can
@@ -231,7 +231,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
                 let _ = unsafe { ensure_profile_slot_stats_cached(base) };
             }
             let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
-            // Unified layout (bd er-effects-rs-qic7): pre-mount, the effective max vitals come
+            // Unified layout: pre-mount, the effective max vitals come
             // from the save slot's serialized PlayerGameData (stored MaxHealth/MaxFP/MaxSP ==
             // runtime current_max_*; located by the same rune-level-invariant scan as the
             // attributes) so the boot loading screen renders the same five-line panel as
@@ -445,7 +445,7 @@ pub fn stats_text_window_reset() {
     }
 }
 
-/// Tip-refresh detour: No-OP the original (er-effects-rs-jsm pivot) so the native tip title/body are never
+/// Tip-refresh detour: No-OP the original so the native tip title/body are never
 /// set and the `Main` tip clip stays faded out -- our overlay player-stats text owns the tip region. Only
 /// active while our loading portrait path is enabled; otherwise it calls through so vanilla tips render.
 ///
@@ -505,7 +505,7 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
     KNOWLEDGE_TIP_SUPPRESSED_HITS.fetch_add(1, Ordering::SeqCst);
 }
 
-/// Tip-advance "enabled"-predicate detour (er-effects-rs-jsm refinement): while our loading portrait
+/// Tip-advance "enabled"-predicate detour: while our loading portrait
 /// path is active, report the advance action as disabled (return 0). The base `MenuWindow::Update`
 /// trigger loop then never fires the advance press (the press is a true no-op -- the action's only body
 /// is `gotoAndPlay('FadeOut')`, whose downstream tip-refresh we already blank), and the per-update

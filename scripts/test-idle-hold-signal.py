@@ -60,8 +60,16 @@ def assistant_agent() -> dict:
     }
 
 
-def run_signal(events: list[dict]) -> str:
-    """Write events to a fixture transcript under a temp home and return the signal's stdout."""
+def run_signal(events: list[dict], *, event_name: str | None = None, live: tuple[str, ...] = (),
+               subagents: dict[str, list[dict]] | None = None) -> str:
+    """Write events to a fixture transcript under a temp home and return the signal's stdout.
+
+    `event_name` goes into the hook event as `hook_event_name`; the check that a pause names what
+    it is blocked on runs only on "Stop". `live` names task ids to run as real processes for the
+    duration, each with stdout on `<home>/tasks/<id>.output` the way the harness starts a Bash call,
+    under this test's own pid, which the signal is pinned to as `CLAUDE_PID`; so the processes of a
+    Claude Code session this test may run under are never read. `subagents` writes
+    `<session>/subagents/agent-<id>.jsonl` beside the transcript."""
     with tempfile.TemporaryDirectory() as home:
         key = PROJECT_DIR.replace("/", "-")
         tdir = Path(home) / ".claude" / "projects" / key
@@ -69,20 +77,45 @@ def run_signal(events: list[dict]) -> str:
         with (tdir / "session.jsonl").open("w", encoding="utf-8") as fh:
             for ev in events:
                 fh.write(json.dumps(ev) + "\n")
-        proc = subprocess.run(
-            ["bash", str(SIGNAL)],
-            input=json.dumps({"transcript_path": str(tdir / "session.jsonl")}),
-            cwd=REPO_ROOT,
-            text=True,
-            capture_output=True,
-            timeout=25,
-            env={**os.environ, "HOME": home, "CLAUDE_PROJECT_DIR": PROJECT_DIR},
-        )
+        for aid, sub_events in (subagents or {}).items():
+            sub = tdir / "session" / "subagents"
+            sub.mkdir(parents=True, exist_ok=True)
+            (sub / f"agent-{aid}.jsonl").write_text(
+                "".join(json.dumps({**ev, "isSidechain": True}) + "\n" for ev in sub_events), encoding="utf-8")
+        hook_event = {"transcript_path": str(tdir / "session.jsonl"), "session_id": "session"}
+        if event_name:
+            hook_event["hook_event_name"] = event_name
+        procs = []
+        tasks = Path(home) / "tasks"
+        tasks.mkdir()
+        try:
+            for tid in live:
+                with (tasks / f"{tid}.output").open("w") as out:
+                    procs.append(subprocess.Popen(["sleep", "30"], stdout=out, stderr=out))
+            proc = subprocess.run(
+                ["bash", str(SIGNAL)],
+                input=json.dumps(hook_event),
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                timeout=25,
+                env={**os.environ, "HOME": home, "CLAUDE_PROJECT_DIR": PROJECT_DIR,
+                     "CLAUDE_PID": str(os.getpid())},
+            )
+        finally:
+            for p in procs:
+                p.kill()
+                p.wait()
         return proc.stdout.strip()
 
 
-def expect(name: str, events: list[dict], predicate, describe: str) -> None:
-    out = run_signal(events)
+CASES_RUN = 0
+
+
+def expect(name: str, events: list[dict], predicate, describe: str, **run) -> None:
+    global CASES_RUN
+    CASES_RUN += 1
+    out = run_signal(events, **run)
     if not predicate(out):
         raise AssertionError(f"{name}: {describe} (got {out!r})")
 
@@ -344,44 +377,60 @@ def main() -> int:
         "expected empty for a long prose ANSWER with nothing pending -- it is not a pause",
     )
 
-    # (16) control for (15): the identical message becomes a VERBOSEPAUSE the moment something really
-    # is running, because then the turn is stopping with work pending and owes a terse blocked-note.
-    # The job is launched in an earlier turn -- launching it in this one would itself be substantive
-    # work and exempt the turn for a different reason, which would not test the pause gate at all.
+    # (16) The same answer with a background job live. Until 2026-11-11 this was the control that a
+    # live job turns any long message into a pause, and only a typed question was excused (2026-10-04).
+    # A typed request is excused too now: replayed over the 40 newest transcripts, every message
+    # halted this way while answering a typed request ("steam did not start", "I need to know what you
+    # were witing for first", "That sounds like the crash we are looking at is a red herring") was an
+    # answer, not a turn stopping to wait. The job is launched in an earlier turn -- launching it in
+    # this one would itself be substantive work and exempt the turn for a different reason.
+    bx1_live = [
+        user("Kick off the build."),
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_bg",
+                        "name": "Bash",
+                        "input": {"command": "cargo build", "run_in_background": True},
+                    }
+                ]
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_bg",
+                        "content": "Command running in background with ID: bx1",
+                    }
+                ]
+            },
+        },
+    ]
     expect(
-        "verbose-long-prose-answer-with-live-background-job",
-        [
-            user("Kick off the build."),
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_bg",
-                            "name": "Bash",
-                            "input": {"command": "cargo build", "run_in_background": True},
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "toolu_bg",
-                            "content": "Command running in background with ID: bx1",
-                        }
-                    ]
-                },
-            },
+        "verbose-long-prose-answer-to-request-with-live-background-job-is-clean",
+        bx1_live
+        + [
             user("Tell me before you investigate if you intended for me to notice it was fixed."),
             assistant_text(answer_no_pending),
         ],
+        lambda o: o == "",
+        "a long answer to a typed request is not a pause because a background job is live",
+    )
+    # (16b) Control: a prompt whose subject is the running job is answered from the job, so the same
+    # message is a verbose pause.
+    expect(
+        "verbose-long-answer-to-prompt-naming-running-task-flags",
+        bx1_live
+        + [user("Tell me what bx1 is doing and whether you intended me to notice the fix."),
+           assistant_text(answer_no_pending)],
         lambda o: o.startswith("VERBOSEPAUSE:"),
-        "expected VERBOSEPAUSE for the same long message when a background job is still live",
+        "a prompt that names the running task's id is about that task, not an unrelated question",
     )
 
     # ---- 2026-10-04 regression: a delivered final report is not a pause ---------------------------
@@ -580,13 +629,14 @@ def main() -> int:
         "'<it> is still compiling' remains a pause",
     )
 
-    # (23) Control: a refused TaskStop (wrong id) leaves the task live.
+    # (23) Control: a refused TaskStop (wrong id) leaves the task live. The prompt asks after the job
+    # ("done yet?"), so the reply is judged as a pause rather than as an answer to the user (see 16).
     expect(
         "verbose-long-failed-taskstop-still-live",
         [user("Run the selftest.")]
         + bg_launch("toolu_g", "bg7")
         + [
-            user("Stop it."),
+            user("Is it done yet? Stop it if not."),
             {
                 "type": "assistant",
                 "message": {
@@ -609,6 +659,355 @@ def main() -> int:
         ],
         lambda o: o.startswith("VERBOSEPAUSE:"),
         "a TaskStop that errored must not count as ending the task",
+    )
+
+    # ---- 2026-11-11: a reply phrase handed on a line of its own ------------------------------------
+    #
+    # With r9 (a backgrounded Bash, task b2dpglvu7) and a release-model subagent still live, the turn
+    # closed on the 113-char note below -- one sentence, a blank line, then the phrase alone on its
+    # line, the way this repo hands reply phrases -- and VERBOSEPAUSE halted it as a long message. The
+    # blank line made it two paragraphs, and the phrase line did not read as waiting on the user. The
+    # same turn's earlier 966-char closing message, a finished survey ending on the same phrase line,
+    # halted too.
+    r9_live = bg_launch("toolu_r9", "b2dpglvu7")
+    handed_note = (
+        "Blocked on r9 (task b2dpglvu7) and the release-model agent; the guards commit needs your "
+        "reply:\n\nauthorize commit"
+    )
+    assert len(handed_note) == 113, len(handed_note)
+    expect(
+        "handed-reply-line-blocked-note-is-clean",
+        [user("Run r9.")] + r9_live + [user("Fix the guards."), assistant_text(handed_note)],
+        lambda o: o == "",
+        "the 113-char note handing `authorize commit` on its own line is blocked on the user",
+    )
+    expect(
+        "handed-sha-reply-line-is-clean",
+        [user("Run r9.")] + r9_live
+        + [user("Fix the guards."),
+           assistant_text("Blocked on r9 (task b2dpglvu7); the push needs your reply:\n\n"
+                          "`authorize 1f3a9c2e7b4d`")],
+        lambda o: o == "",
+        "a backticked `authorize <sha>` on its own line is blocked on the user",
+    )
+
+    survey_then_phrase = (
+        "The survey of the Stop fixtures is finished. Of the forty-one fixtures, thirty-eight halt or "
+        "allow exactly as their cases say. Two idle-hold fixtures allowed a long blocked note that "
+        "their cases expected to halt, because the live job in each was launched in the same turn and "
+        "that launch counted as substantive work; both cases now launch the job a turn earlier, which "
+        "is the shape the rule is about. One ask-without-receiver fixture halted on a reply phrase it "
+        "should have read as typed, and the replay audit found the same shape in four real transcripts "
+        "from the last week, all of them a closing line handing the commit phrase. The guards commit "
+        "holds the rego change, the three new fixtures, the replay audit script and the stop-guard "
+        "cases that pin them; the full stop-guard suite and opa test both pass on it. r9 and the "
+        "release-model agent are unrelated to this commit and keep running.\n\nauthorize commit"
+    )
+    assert len(survey_then_phrase) > 900, len(survey_then_phrase)
+    expect(
+        "handed-reply-line-after-long-report-is-clean",
+        [user("Run r9 and the full run.")] + r9_live + bg_launch("toolu_full", "bfull1")
+        + [user("Survey the Stop fixtures."), assistant_text(survey_then_phrase)],
+        lambda o: o == "",
+        "a finished report that hands `authorize commit` on its own line is blocked on the user "
+        "whatever its length, with two background jobs live",
+    )
+
+    recap_tail = (
+        "The survey of the Stop fixtures is finished: thirty-eight of forty-one halt or allow as "
+        "their cases say, two idle-hold fixtures allowed a long blocked note that should have halted, "
+        "and one ask-without-receiver fixture halted on a reply phrase it should have read as typed. "
+        "The guards commit holds the rego change, its three new fixtures and the replay audit script, "
+        "and the release-model agent is rewriting the planner's affinity table, which r9 needs before "
+        "it can rank the forty armaments again."
+    )
+    blocked_recap = "Blocked on r9 (task b2dpglvu7) and the release-model agent. " + recap_tail
+    assert 550 <= len(blocked_recap) <= 650, len(blocked_recap)
+    expect(
+        "blocked-recap-without-phrase-line-flags",
+        [user("Run r9.")] + r9_live + [user("Fix the guards."), assistant_text(blocked_recap)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "the same blocked opener with a 600-char recap and no phrase line is still a verbose pause",
+    )
+    mentioned_recap = (
+        "Blocked on r9 (task b2dpglvu7) and the release-model agent, and the guards commit needs the "
+        "authorize commit reply. " + recap_tail
+    )
+    expect(
+        "phrase-mentioned-mid-sentence-recap-flags",
+        [user("Run r9.")] + r9_live + [user("Fix the guards."), assistant_text(mentioned_recap)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "naming the phrase inside a sentence hands nothing, so the long recap is still a verbose pause",
+    )
+
+    expect(
+        "idle-hold-with-handed-reply-line-is-clean",
+        [user("Fix the guards."),
+         assistant_text("Holding for r9 before rerunning the gate.\n\nauthorize commit")],
+        lambda o: o == "",
+        "an idle phrase in a message that hands `authorize commit` on its own line is user-blocked",
+    )
+    expect(
+        "idle-hold-with-phrase-mid-sentence-flags",
+        [user("Fix the guards."),
+         assistant_text("Holding for r9 before rerunning the gate; the commit waits on the "
+                        "authorize commit reply.")],
+        lambda o: o.startswith("IDLEHOLD:"),
+        "the phrase named inside a sentence does not excuse an idle hold",
+    )
+
+    # ---- 2026-11-11: an answer that accounts for a running task is not a pause ---------------------
+    #
+    # Session 5ec7b779, verbatim. The user typed a question; the turn edited a doc, messaged an agent
+    # and answered. no_unexplained_running_tasks halted the answer because r10 (bdj5lkbhk) was left
+    # running unnamed, and the rewrite -- in a turn opened by that Stop-hook feedback, so it has no tool
+    # call -- added the sentence the guard asks for. VERBOSEPAUSE then halted it at 735 chars.
+    def typed(text: str) -> dict:
+        return {"type": "user", "origin": {"kind": "human"}, "promptSource": "typed",
+                "message": {"role": "user", "content": text}}
+
+    def stop_feedback_meta(text: str) -> dict:
+        return {"type": "user", "isMeta": True,
+                "message": {"role": "user", "content": "Stop hook feedback:\n" + text}}
+
+    timelines_question = typed(
+        "Almost all of your revisions were unaided or guided by me, so I ask again, should I ever "
+        "listen to you for timelines? Are timeline predictions useful? Should an LLM be prohibited "
+        "from making non-cited claims about timelines?"
+    )
+    answer_core = (
+        "No, not when the forecast cites nothing measured. My uncited estimates here came in 10× to "
+        "3,500× too low, and most of the cost came from model changes your corrections drove (homing, "
+        "delayed follow-ups, floor aim, objective lines, release frames), which no guess made up front "
+        "could have included. A projection from a measured pace or a timed sample is useful, because it "
+        "decides whether to wait for a run or stop it. A guess about development effort isn't. So yes "
+        "to the prohibition. "
+    )
+    first_answer = (
+        answer_core + "The rule is now in `docs/agents/runtime-evidence.md`. The background agent is "
+        "building the guard that will block an uncited run-time forecast and any effort forecast."
+    )
+    accounted_answer = (
+        answer_core + "The rule is now in `docs/agents/runtime-evidence.md`, and the background agent "
+        "is building the guard that will block an uncited forecast. r10 (bdj5lkbhk) is still running "
+        "because it gives the v9 timing baseline the speed-up will be measured against."
+    )
+    assert len(accounted_answer) == 735, len(accounted_answer)
+    unexplained_feedback = stop_feedback_meta(
+        "Background tasks you started are still running and the closing message does not account for "
+        "them: bdj5lkbhk (bash: S=/tmp/claude-1000/x...). Any monitor or loop you no longer need, stop "
+        "it first (TaskStop with its task id) -- that is the first thing to do, before the report. For "
+        "one that is still needed, name its task id in the closing message in a sentence that says "
+        "what it is still waiting for or doing."
+    )
+    timelines_turn = (
+        [typed("Start r10 from sim-release.")]
+        + bg_launch("toolu_r10", "bdj5lkbhk", foreground_moved=True)
+        + [assistant_text("r10 is running from sim-release (bdj5lkbhk), tailed in a kitty tab."),
+           timelines_question,
+           assistant_edit(), tool_result(),
+           {"type": "assistant", "message": {"content": [
+               {"type": "tool_use", "id": "toolu_msg", "name": "SendMessage",
+                "input": {"to": "a640aedb6bb824f10", "message": "Addition from the user."}}]}},
+           tool_result(),
+           assistant_text(first_answer),
+           unexplained_feedback]
+    )
+    expect(
+        "answer-accounting-for-running-task-after-stop-feedback-is-clean",
+        timelines_turn + [assistant_text(accounted_answer)],
+        lambda o: o == "",
+        "the 735-char answer whose only task reference is the sentence no_unexplained_running_tasks "
+        "demanded is an answer to the typed question, not a blocked pause",
+    )
+    expect(
+        "answer-saying-it-waits-on-running-task-flags",
+        timelines_turn + [assistant_text(
+            accounted_answer.replace("is still running because it gives",
+                                     "is still running, and I'm waiting on it for"))],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "the same answer whose task sentence says the turn is waiting on r10 is a verbose pause",
+    )
+
+    # A real verbose hold from the same session, verbatim: the user typed a request, the turn launched
+    # two runs, the Stop hook asked for them to be accounted for, and the rewrite said it was waiting on
+    # both and tabled them. It must still halt.
+    waiting_on_both = (
+        "Two background runs are still going, and I'm waiting on both:\n\n"
+        "| task | what it's still doing |\n|---|---|\n"
+        "| `bmb1rcjop` | the pouch selftest, then an INT 50 Uchigatana build holding a Carian Regal "
+        "Scepter: the first real test of attack spells competing with buffs for memory slots |\n"
+        "| `b0r0j85m6` | the FTH 80 Erdtree Seal kit on the new back-off situations (the INT 80 half "
+        "already finished: Twin Moons alone) |"
+    )
+    assert len(waiting_on_both) == 412, len(waiting_on_both)
+    expect(
+        "waiting-on-both-runs-after-stop-feedback-flags",
+        [typed("make PRs for each branch and then do that next")]
+        + bg_launch("toolu_kit", "b0r0j85m6") + bg_launch("toolu_pouch", "bmb1rcjop")
+        + [assistant_text("Both runs are going."),
+           stop_feedback_meta(
+               "Background tasks you started are still running and the closing message does not "
+               "account for them: b0r0j85m6 (bash: python3 scripts/er-mechanics-spells.py --stats "
+               "int=80,dex=20 --catalyst 'Cari...)."),
+           assistant_text(waiting_on_both)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "'I'm waiting on both' plus a table, after Stop-hook feedback, is a verbose blocked pause",
+    )
+
+    # ---- 2026-11-11: a pause names what it is blocked on ----------------------------------------
+    #
+    # User words, verbatim: "So next time, how are you going to monitor your own shells and understand
+    # when they are running so you can communicate clearly to the user why you're paused (blocked
+    # because X shell is running) or whatever you're doing". On Stop, a pause whose closing message
+    # names nothing scripts/cupcake_session_tasks.py measures running gets that report: alone as
+    # UNNAMEDPAUSE, or on a second line after VERBOSEPAUSE or IDLEHOLD. The shells here are real
+    # processes (run_signal's `live`), so the process-table half is exercised, not stubbed.
+    def agent_launch(tool_id: str, agent_id: str, description: str) -> list[dict]:
+        return [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": tool_id, "name": "Agent",
+                 "input": {"description": description, "prompt": "go", "run_in_background": True}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": tool_id,
+                 "content": f"Async agent launched successfully. agentId: {agent_id} (internal ID)"}]}},
+        ]
+
+    board_run = (
+        [typed("Regenerate the boards.")] + bg_launch("toolu_board", "bboard1")
+        + [assistant_text("The regeneration is running."), typed("How is it going?")]
+    )
+    stop = {"event_name": "Stop"}
+    expect(
+        "pause-naming-no-live-shell-gets-the-report",
+        board_run + [assistant_text("Blocked on the board run.")],
+        lambda o: o.startswith("UNNAMEDPAUSE:") and "bboard1 (main session:" in o and "\n" not in o,
+        "a short pause that names no live shell is UNNAMEDPAUSE with the report",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "pause-naming-the-live-shell-is-clean",
+        board_run + [assistant_text("Blocked on bboard1, the board run.")],
+        lambda o: o == "",
+        "naming the shell's task id is what the pause owes",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "pause-check-is-stop-only",
+        board_run + [assistant_text("Blocked on the board run.")],
+        lambda o: o == "",
+        "on UserPromptSubmit what runs now is not what ran at turn end; the check stays out",
+        live=("bboard1",), event_name="UserPromptSubmit",
+    )
+    expect(
+        "pause-with-nothing-measured-running-is-judged-as-before",
+        board_run + [assistant_text("Blocked on the board run.")],
+        lambda o: o == "",
+        "the transcript says bboard1 runs, the process table lists nothing: no report, no halt",
+        **stop,
+    )
+    recap = (
+        "Blocked on the board run. It is regenerating the weapon boards with the new damage model, "
+        "which changes the ranking of every greatsword against the poise threshold, so the per-weapon "
+        "pages will move. The earlier run finished the katana and straight sword families already, "
+        "and the colossal weapons are the slowest family by far because of their attack-set counts. "
+        "After the boards land I will diff them against yesterday's and look for any weapon whose "
+        "rank moved by more than three places."
+    )
+    assert len(recap) > 450, len(recap)
+    expect(
+        "verbose-pause-naming-nothing-carries-the-report-on-a-second-line",
+        board_run + [assistant_text(recap)],
+        lambda o: o.startswith("VERBOSEPAUSE:") and "\nUNNAMED:Shells running: bboard1" in o,
+        "VERBOSEPAUSE first line unchanged; the report rides after it",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "verbose-pause-naming-the-shell-is-only-verbose",
+        board_run + [assistant_text(recap.replace("the board run.", "bboard1, the board run."))],
+        lambda o: o.startswith("VERBOSEPAUSE:") and "UNNAMED" not in o,
+        "a long pause that names the shell is only the verbose halt",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "idle-hold-naming-nothing-carries-the-report",
+        board_run + [assistant_text("I'm holding for the board run.")],
+        lambda o: o.startswith("IDLEHOLD:") and "\nUNNAMED:Shells running: bboard1" in o,
+        "IDLEHOLD first line unchanged; the report rides after it",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "pause-after-substantive-work-is-not-asked-to-name",
+        board_run + [assistant_edit(), tool_result(), assistant_text("Blocked on the board run.")],
+        lambda o: o == "",
+        "a turn that did real work is not a pause",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "pause-on-the-user-is-not-asked-to-name",
+        board_run + [assistant_text("Blocked on the board run, and I need you to pick the build.")],
+        lambda o: o == "",
+        "a turn that waits on the user is exempt, as from VERBOSEPAUSE",
+        live=("bboard1",), **stop,
+    )
+    expect(
+        "pause-waiting-on-you-is-not-asked-to-name",
+        board_run + [assistant_text("Waiting on you to say whether to relaunch Elden Ring.")],
+        lambda o: o == "",
+        "verbatim from the replay, session 965886fc: a wait on the user, in words USER_WAIT_RE misses",
+        live=("bboard1",), **stop,
+    )
+
+    speed_agent = (
+        [typed("Speed up the attack-set stage.")]
+        + agent_launch("toolu_agent", "a5eed0011223344aa", "Speed up attack-set stage")
+        + [assistant_text("The agent is on it."), typed("How is it going?")]
+    )
+    expect(
+        "pause-naming-no-working-agent-gets-the-report",
+        speed_agent + [assistant_text("Blocked until the agent reports back.")],
+        lambda o: o.startswith("UNNAMEDPAUSE:") and "a5eed0011223344aa 'Speed up attack-set stage' (running)" in o,
+        "a working agent, no shells: the report lists the agent",
+        **stop,
+    )
+    for name, text in (("description", "Blocked on the speed up attack-set stage agent."),
+                       ("short-id", "Blocked on agent a5eed00."),
+                       ("full-id", "Blocked on a5eed0011223344aa.")):
+        expect(
+            f"pause-naming-the-agent-by-{name}-is-clean",
+            speed_agent + [assistant_text(text)],
+            lambda o: o == "",
+            f"an agent named by its {name} is named",
+            **stop,
+        )
+    expect(
+        "pause-naming-nothing-while-a-subagent-shell-runs-lists-it-under-the-agent",
+        speed_agent + [assistant_text("Blocked on the agent's selftest.")],
+        lambda o: o.startswith("UNNAMEDPAUSE:") and "bsub7 (agent a5eed0011223344aa" in o,
+        "a subagent's shell, which the main transcript never shows, is in the report with its owner",
+        live=("bsub7",), subagents={"a5eed0011223344aa": bg_launch("toolu_sub", "bsub7")}, **stop,
+    )
+    expect(
+        "pause-naming-a-subagent-shell-is-clean",
+        speed_agent + [assistant_text("Blocked on bsub7, the agent's selftest.")],
+        lambda o: o == "",
+        "naming the subagent's shell id is naming what the pause waits on",
+        live=("bsub7",), subagents={"a5eed0011223344aa": bg_launch("toolu_sub", "bsub7")}, **stop,
+    )
+    monitor_launch = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_mon", "name": "Monitor", "input": {"command": "tail -f x.log"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_mon",
+             "content": "Monitor started (task bmon7, timeout 1800000ms)."}]}},
+    ]
+    expect(
+        "pause-naming-a-running-monitor-is-clean",
+        board_run[:-1] + monitor_launch + [assistant_text("Watching."), typed("How is it going?"),
+                                           assistant_text("Blocked on bmon7, the log watcher.")],
+        lambda o: o == "",
+        "a Monitor writes no task output file; the transcript's running Monitor counts as named",
+        live=("bboard1",), **stop,
     )
 
     # (24) 2026-10-30: the harness logs an `api-request-blob` copy of each message it sends, written
@@ -652,7 +1051,7 @@ def main() -> int:
         "dropping blob copies must not hide a launch that never returned",
     )
 
-    print("idle-hold signal tests passed")
+    print(f"idle-hold signal tests passed ({CASES_RUN} cases)")
     return 0
 
 

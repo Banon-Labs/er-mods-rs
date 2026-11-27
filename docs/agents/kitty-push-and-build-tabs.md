@@ -18,6 +18,32 @@ The split follows the log with `tail --pid` on the newest `git push` process (or
 lasts exactly as long as the push. It then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own
 output, waits 5 seconds, and closes. `--selftest` covers the verdict, the window script's quoting
 and the split and tab launch options.
+
+## A red stage is fixed while the rest of the suite runs (user directive 2026-11-25)
+
+The split is the user's view; it wakes nobody. The suite prints `>>> stage <name> RED (exit <n>)
+<secs>s <log>` the moment a stage fails, and the other stages can run for another hour. On
+2026-11-25 the policy stage of a push went red at 1702 s and sat there until the push's completion
+notification, after every other stage. The user's words: "It would be wise, and prudent, to not
+wait until all checks pass before addressing any one of the failing reds in each future case". So
+every background `git push`, hand-run pre-push hook or full `check.sh` also gets a `Monitor`, armed
+in the same turn, with `timeout_ms` 1800000:
+
+```bash
+tail -n +1 --pid=<git push pid> -F <the push task's output file> \
+    | grep --line-buffered -E 'RED|FAIL|error|REFUSED|rejected|exited with code' \
+    | python3 /home/banon/projects/er-mods-rs/scripts/monitor-throttle.py 10
+```
+
+`kitty-tail-push.py` prints this exact command, with the pid filled in, after it opens the split
+(`--monitor-command` prints only the command). `--pid` ends the Monitor when the push ends; without
+it, stop the Monitor with TaskStop once the push is over. A Monitor lasts 30 minutes at most, so
+re-arm it on its expiry notice while the suite still runs. When it reports a red stage, read that
+stage's log (the path on the line) and start the fix at once. The Stop guard
+`.cupcake/policies/claude/no_unwatched_red_stage.rego` (signal
+`.cupcake/signals/last_assistant_unwatched_red_stage.sh`, logic and `--selftest` in
+`scripts/cupcake_red_stage_watch.py`) halts a turn while such a task runs with no running Monitor
+that follows its output file and passes `RED`, and names the command to arm.
 Close Elden Ring before pushing: check.sh refuses while it runs. When the game up is the run that
 stamped the tip, close it with `python3 scripts/er-teardown.py --reason=stamped-<one-token-why>` as
 the whole command (a trailing `| tail -<n>` is allowed), which the teardown guard admits only while
@@ -67,3 +93,72 @@ boards --file <task output file>`, which follows those. The Stop guard
 `.cupcake/policies/claude/no_untailed_long_run.rego` halts a turn that backgrounded a run from its
 signal's `LONG_RUNS` list (boards, weapon and DLL builds, the check suite, `git push`, ...) without
 such a split or tab.
+
+Any other background task gets a split, which the global Stop guard
+`~/.config/cupcake/policies/claude/background_task_needs_tail.rego` asks for. In this repo it
+suggests `python3 /home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py --split --title
+'tail: <what> (<task id>)' --file <task output file>`: with `--file` and no `--pid` or `--match`,
+the helper follows whatever holds the first file open for writing, and the split closes 5 s after
+it exits. The global `kitty-tail-bg` it suggests elsewhere is refused here by
+`bash_no_python_file_write.rego`, since it is a python program this repo has not committed.
+
+A tail split whose task has finished is closed by the self-closer, never by hand (user, 2026-11-16:
+"this is not permission to close them, its permission to ensure the self closer self closes before
+re-running it"). Splits opened the old way (`--hold tail -F`, no `--pid`) never exit on their own;
+`kitty-tail-task.py --reap` closes each one whose followed files no live process holds open for
+writing and that have been quiet for its grace period. Before running it on the user's windows,
+prove it on a test split (`--reap-selftest`): it must close the split of a finished writer and
+leave the split of a live one open.
+
+A tail split is for the user, so it follows the files that say how far the run is and how long it
+has left. It does not follow the agent's own instruments: a memory sampler, a trace, a probe log
+(user, 2026-11-17: "the memory information is for you probably, whereas the progress information
+and duration is for me", of a split that interleaved a 15-second memory sampler with the run's
+progress lines). Those files are read by the agent, which reports only what they conclude. Pass
+`--file` for the progress output alone.
+
+A queue that runs several steps one after another writes one log per step, and its split follows
+every one of them from the start, with `--pid` on the queue's shell: `tail -F` picks up a log that
+does not exist yet. On 2026-11-17 an agent's queue split followed only its first step's log, so it
+sat on that step's `exit 0` line for the whole second step, and the user asked why it had not
+closed. Reopening a view (same task id in the title) closes the earlier ones.
+
+## A draft PR the session opened gets an undraft split, and is watched (user request 2026-11-23)
+
+The global draft guard refuses `gh pr ready` for the agent, so the user takes a PR out of draft
+(user, 2026-11-23: "for each draft just in this session, open kitty splits to undraft when needed,
+and monitor them"). For every draft PR the session opens, once it is the one to merge next, open
+the command for them instead of asking in prose:
+
+```bash
+python3 scripts/kitty-user-command.py --title 'undraft #<n>' --why '<why it is ready>' \
+    --status-file <scratchpad>/undraft-<n>.status -- 'gh pr ready <n> --repo Banon-Labs/er-mods-rs'
+```
+
+Then arm a run_in_background until-loop on that status file's `exit=` line (tailed like any other
+background task), keep its CI under `gh pr checks <n> --watch` in the background, and merge it with
+a merge commit (the repo allows no squash) once both are done and its checks pass.
+## "CI is still running" needs a watcher of those checks (user correction 2026-11-25)
+
+The `CI STATE (measured, not remembered)` line that each prompt injects is one read of
+`gh pr checks`, and so is a `gh pr checks <n>` call. Neither one follows CI. A closing message may
+say that CI is running, pending or queued, or that a CI job has not finished, only while a
+background task of the session is watching that pull request's checks. The watcher's output is
+tailed in a split, and its task id is named in the closing message:
+
+```bash
+gh pr checks <n> --watch --interval 30 > <log> 2>&1      # run_in_background; or: gh run watch <run-id>
+python3 scripts/kitty-tail-task.py --title 'CI: PR #<n>' --file <log> --match 'gh pr checks'
+```
+
+This came from a session that closed with "CI on GitHub is still running; `compiles` and
+`cargo-test` hadn't finished at last check." after one read of that line. Nothing was watching the
+checks, and no split was open. The user's reply: "I don't believe you because your rego policy that
+told you to open a kitty tab/split to tail the output didn't run". Remote CI is not a local task, so
+none of the background-task guards had anything to check. The Stop guard
+`.cupcake/policies/claude/no_unwatched_ci_claim.rego` now halts such a claim when no live
+`gh pr checks --watch`, `gh run watch` or until/while polling loop is following it. Its signal is
+`.cupcake/signals/last_assistant_ci_running_claim.sh`, and the classifier lives in
+`scripts/cupcake_ci_running_claim.py` (`--selftest`). Quoted text is skipped, and so is a report
+that CI finished, passing or failing. `no_untailed_long_run` counts both watchers as long runs, so
+a watcher without its split halts as well.

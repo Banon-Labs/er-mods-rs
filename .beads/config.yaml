@@ -33,7 +33,7 @@ issue-prefix: "er-effects-rs"
 # Use 'bd export --events' to trigger manually regardless of this setting.
 # events-export: false
 
-# Multi-repo configuration (experimental - bd-307)
+# Multi-repo configuration (experimental)
 # Allows hydrating from multiple repositories and routing writes to the correct database
 # repos:
 #   primary: "."  # Primary repo (where this database lives)

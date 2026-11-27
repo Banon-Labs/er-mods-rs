@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Why was the check suite refused?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The rego rule in `.cupcake/policies/claude/no_whole_check_sh.rego` refuses a whole `scripts/check.sh` run, and AGENTS.md describes it. The game's stacking rule is described in docs/mechanics/buffs.md."}]}}

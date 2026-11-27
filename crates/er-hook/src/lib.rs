@@ -1957,7 +1957,7 @@ pub unsafe fn MH_Uninitialize() -> MH_STATUS {
 /// every DLL's log frozen at the same instant): 62 threads all in state `S`, wchan
 /// `anon_pipe_read` x48 including the leader, and wineserver itself idle in `do_epoll_wait` --
 /// nothing pending on its side, because the threads that would have had requests outstanding were
-/// suspended before they could make them. Open issue er-effects-rs-1742.
+/// suspended before they could make them.
 ///
 /// It is intermittent for the reason the mechanism predicts: it needs two freeze windows to
 /// overlap, and each is short. That is also why a lock is the whole fix -- there is nothing wrong

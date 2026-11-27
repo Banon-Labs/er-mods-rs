@@ -403,3 +403,131 @@ test_deny_every_executing_spelling if {
 		denied(command)
 	}
 }
+
+# --- the script by name, not every name that ends in it (2026-11-11) ---------
+# The guard matched any word ending in `check.sh` and refused the rulebook's own compile
+# signal as a run of the suite. The suite is the file `check.sh` as a whole path component,
+# in each spelling that reaches it, including the bare name once a `cd` or an `env -C` has
+# moved the shell into `scripts/`.
+test_deny_relative_path if {
+	denied("scripts/check.sh")
+}
+
+test_deny_absolute_path_alone if {
+	denied("/home/banon/projects/er-mods-rs/scripts/check.sh")
+}
+
+test_deny_bash_relative if {
+	denied("bash scripts/check.sh")
+}
+
+test_deny_dot_slash_invoked_directly if {
+	denied("./scripts/check.sh")
+}
+
+test_deny_worktree_copy_of_the_suite if {
+	denied("bash /home/banon/projects/er-mods-rs/.worktrees/guards-main/scripts/check.sh")
+}
+
+test_deny_quoted_path if {
+	denied(`bash "scripts/check.sh"`)
+}
+
+test_deny_cd_into_the_repo_then_run if {
+	denied("cd /home/banon/projects/er-mods-rs && bash scripts/check.sh")
+}
+
+test_deny_cd_into_scripts_then_dot_slash if {
+	denied("cd scripts && ./check.sh")
+}
+
+test_deny_cd_into_scripts_then_bash_bare_name if {
+	denied("cd /home/banon/projects/er-mods-rs/scripts; bash check.sh --stage lint")
+}
+
+test_deny_env_chdir_short_option if {
+	denied("env -C scripts ./check.sh")
+}
+
+test_deny_env_chdir_short_option_with_a_shell if {
+	denied("env -C /home/banon/projects/er-mods-rs/scripts bash check.sh")
+}
+
+test_deny_env_chdir_long_option if {
+	denied("env --chdir=/home/banon/projects/er-mods-rs/scripts ./check.sh")
+}
+
+test_deny_env_chdir_into_the_repo if {
+	denied("env -C /home/banon/projects/er-mods-rs bash scripts/check.sh")
+}
+
+# The directory stands aside only as the value of `env`'s own option: a reader `env` runs
+# after it still takes the script as its operand.
+test_allow_env_chdir_then_a_reader if {
+	allowed("env -C /home/banon/projects/er-mods-rs/scripts cat check.sh")
+}
+
+# The measured refusal and the other tracked scripts whose names end in the same letters.
+other_check_scripts := [
+	"bash .cupcake/signals/rego_compile_check.sh",
+	".cupcake/signals/rego_compile_check.sh",
+	"/home/banon/projects/er-mods-rs/.cupcake/signals/rego_compile_check.sh",
+	"bash /home/banon/projects/er-mods-rs/.worktrees/guards-main/.cupcake/signals/rego_compile_check.sh",
+	"echo '{}' | bash .cupcake/signals/rego_compile_check.sh",
+	"cd /home/banon/projects/er-mods-rs && bash .cupcake/signals/rego_compile_check.sh < /tmp/x/event.json",
+	"cd .cupcake/signals && ./rego_compile_check.sh",
+	"bash scripts/act-check.sh --list",
+	"bash scripts/run-save-oracle-check.sh",
+]
+
+test_allow_rego_compile_check_signal if {
+	allowed("bash .cupcake/signals/rego_compile_check.sh")
+}
+
+test_allow_every_other_script_ending_in_check_sh if {
+	every command in other_check_scripts {
+		allowed(command)
+	}
+}
+
+# --- exec launchers and shell keywords in front of the suite (2026-11-19) ----
+# Each of these ran the suite and was allowed, measured with `opa eval` against this guard:
+# the launcher or keyword was read as the program and the script as its operand.
+launched_check_runs := [
+	"chrt --idle 0 bash scripts/check.sh",
+	"chrt -i 0 bash scripts/check.sh",
+	"taskset -c 0-3 bash scripts/check.sh",
+	"taskset 0x3 bash scripts/check.sh",
+	"ionice -c 3 bash scripts/check.sh",
+	"ionice -c idle bash scripts/check.sh",
+	"systemd-run --user --scope -p MemoryMax=4G bash scripts/check.sh",
+	"flock /tmp/l bash scripts/check.sh",
+	"time bash scripts/check.sh",
+	"/usr/bin/time -v bash scripts/check.sh",
+	"\\time bash scripts/check.sh",
+	"chrt --idle 0 ionice -c 3 taskset -c 0-3 ./scripts/check.sh",
+	"{ bash scripts/check.sh; }",
+	"! bash scripts/check.sh",
+	"if bash scripts/check.sh; then :; fi",
+	"while bash scripts/check.sh; do :; done",
+	"until bash scripts/check.sh; do :; done",
+	"if false; then :; elif bash scripts/check.sh; then :; fi",
+]
+
+test_deny_check_sh_behind_a_launcher_or_keyword if {
+	every command in launched_check_runs {
+		denied(command)
+	}
+}
+
+# Named in an operand or a quoted argument, behind a launcher, the script still runs nothing.
+test_allow_launcher_spelling_as_an_operand if {
+	allowed("git commit -m 'chrt --idle 0 bash scripts/check.sh'")
+	allowed("echo chrt --idle 0 bash scripts/check.sh")
+	allowed(`bd remember "taskset -c 0-3 bash scripts/check.sh was allowed"`)
+}
+
+# `-n` belongs to the shell after the launcher: a syntax check, as without one.
+test_allow_syntax_check_behind_a_launcher if {
+	allowed("chrt --idle 0 bash -n scripts/check.sh")
+}

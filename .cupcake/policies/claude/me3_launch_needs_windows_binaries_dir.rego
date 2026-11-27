@@ -89,10 +89,11 @@ unflagged_launch_in(words) if {
 }
 
 # me3 is the program of its command: nothing but wrappers (`env`, `nohup`, `timeout 30`,
-# `VAR=value`, a shell) stands between the command's start and it.
+# `VAR=value`, a shell) or exec launchers (`chrt --idle 0`, `taskset -c 0-3`, allowed until
+# 2026-11-19) stands between the command's start and it.
 me3_program(words, index) if {
 	not commands.operand_shaped(words, index)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 # me3 handed to a launcher that runs the command after its own `--`: the repo's gamescope runs

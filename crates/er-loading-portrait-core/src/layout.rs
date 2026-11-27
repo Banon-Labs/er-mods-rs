@@ -81,7 +81,7 @@ pub const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
 /// remaps proved crash-prone.
 ///
 /// The ctor entry is `0x2a2030`, the prologue `48 89 4c 24 08 53 56 57 41 56 48 83 ec 38`. A wrong
-/// entry is not a theoretical risk here (er-effects-rs-3t4m): a stale value once pointed at the
+/// entry is not a theoretical risk here: a stale value once pointed at the
 /// mid-body instruction `MOV [RSI+0x38],RAX` (+0xc0, zero xrefs). A MinHook detour installed there
 /// is entered mid-frame, so its trampoline continues the ctor epilogue at an rsp displaced by the
 /// detour call frame and the final RET pops a garbage stack slot -> deterministic stack-exec
@@ -135,7 +135,7 @@ pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
 /// `CS::KnowledgeLoadingScreen` tip-refresh (`0x14090b950`, RVA
 /// 0x90b950). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
-/// (`this+0xb88`). er-effects-rs-jsm PIVOT: we no-OP it (skip the original) so the native tip title/body
+/// (`this+0xb88`). PIVOT: we no-OP it (skip the original) so the native tip title/body
 /// are never set -- our own player-stats text (overlay) shows in the tip region instead. Installed before
 /// the widget ctor so even the ctor's one-shot initial tip is suppressed.
 pub const KNOWLEDGE_TIP_REFRESH_RVA: usize = 0x90b950;

@@ -1,10 +1,10 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project instructions themselves live in this file.
 
 ## Read on demand
 
-The rest of the project rules live in `docs/agents/`. Nothing there is loaded automatically: read
+The rest of the project instructions live in `docs/agents/`. Nothing there is loaded automatically: read
 the file that matches the work before starting it.
 
 | Before you ... | read |
@@ -49,11 +49,44 @@ two handed-over tabs came up as bare prompts, because the text was sent before f
 prompt and its startup ate it; the helper now waits for kitty's `at_prompt` and exits non-zero
 unless the comments and the command are on screen, so a window it reports is a window with the
 command in it.
+A handed-over command is watched from the moment the user presses enter, not only at its end
+(user, 2026-11-17: "If I did run the command, you would not know until I tell you. If the command
+started, you would not know until I tell you. If the command failed, you would not know until I
+tell you, because you set no monitors"). The agent had watched only for the file `py-spy record`
+writes when it succeeds, 20 minutes in, so a failure would never have reached it. Pass
+`--status-file <path>`: the window then appends a `started` line, the command's own output, and an
+`exit=<code>` line to that file whether it succeeds or fails. Follow the file with a `Monitor`
+(each line is an event) before the turn ends.
+When the command has ended, read everything the window shows and close it, in one step:
+`python3 scripts/kitty-user-command.py --consume <window_id>`. It prints the screen and scrollback,
+then closes the window, and refuses while the command still runs. A hand-over window left open
+means its output was never read (user, 2026-11-17: "I see this, which means I share it with you
+because its still open and that indicates you haven't read it either", of a py-spy tab whose
+`Errors: 22708` the agent never saw, having read only the file py-spy wrote).
 A long command goes in a file passed as `--command-file <path>`: a `git push && gh pr
 create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
 The Stop hook refuses a closing message that carries a shell code block.
 
 A push and a long background build each also get a kitty split: `docs/agents/kitty-push-and-build-tabs.md`.
+
+So does a background subagent (user, 2026-11-11: "I don't understand how you could have a round
+running without me being able to see the output"). Right after an Agent call answers with
+`agentId: <id>`, and after a SendMessage that resumes one, the main session runs
+`python3 scripts/kitty-tail-agent.py <id>` (several ids open one tab each). The tab opens with
+`--keep-focus` and runs `scripts/watch-workflow.py --agent`, which renders
+`~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl` in color as the agent writes it
+and closes 5 s after the main transcript says the agent finished or was stopped. Enforced by
+`.cupcake/policies/claude/no_untailed_agent.rego` over `.cupcake/signals/last_assistant_untailed_agent.sh`
+(`scripts/cupcake_untailed_agent.py`; `--replay` judges recent transcripts), tested by
+`scripts/test-untailed-agent-signal.py`, `scripts/kitty-tail-agent.py --selftest` (`--live-selftest`
+against a real tab) and the `untailed_agent*.jsonl` fixtures in `scripts/test-cupcake-stop-guards.py`.
+A background push or check suite also gets a `Monitor` that wakes the agent on a red stage, and a
+red stage is read and fixed while the other stages still run (user, 2026-11-25: "It would be wise,
+and prudent, to not wait until all checks pass before addressing any one of the failing reds in
+each future case"). `scripts/kitty-tail-push.py` prints the Monitor command after it opens the
+split. Enforced by `.cupcake/policies/claude/no_unwatched_red_stage.rego` over
+`.cupcake/signals/last_assistant_unwatched_red_stage.sh` (`scripts/cupcake_red_stage_watch.py
+--selftest`, fixtures `unwatched_red_stage*.jsonl` in `scripts/test-cupcake-stop-guards.py`).
 
 ## A command written for the user is spelled absolutely
 
@@ -69,7 +102,7 @@ python3 scripts/er-teardown.py                                    # run it yours
 ```
 
 "Run it from `/home/banon/projects/er-mods-rs`" is not a substitute -- it makes the
-user do the joining, and the joining is the part that was wrong. This is the same rule
+user do the joining, and the joining is the part that was wrong. This is the same practice
 the global instructions already state for artifact paths, applied to commands: absolute,
 clickable, pasteable as-is. The habit came from somewhere executable and was fixed
 there too -- `bash_no_python_file_write.rego` used to admit ONLY the repo-relative
@@ -113,7 +146,7 @@ said so twice in the same session ("I can't activate dried finger unless I have 
 no prior activation"). The agent recited a sequence it had been corrected on, in the wrong order,
 to the person who corrected it.
 
-The rule, concretely:
+Concretely:
 
 - Ask for an OUTCOME: "a fresh session with the item used in it", "a host advertising from a world
   the item is active in". Never a button sequence, never "open X then cancel then use Y".
@@ -130,8 +163,8 @@ The 2026-07-22 standing order that the agent drive every in-game input was REMOV
 2026-09-23. It said that asking the user to perform an input was an instruction-following failure
 and that every runtime test had to be agent-driven end to end. It no longer holds: pinning
 `er-input-harness` to drive a menu walk is now a choice to justify per run, not an obligation, and
-the user playing their own game is an ordinary way for a run to proceed. The rule above it still
-stands and is the one that governs -- ask for an OUTCOME, never recite a button sequence.
+the user playing their own game is an ordinary way for a run to proceed. The guidance above it still
+stands and is what governs -- ask for an OUTCOME, never recite a button sequence.
 
 ## User steering and prose
 
@@ -169,7 +202,7 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
-### Rules
+### Beads usage
 
 - Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
@@ -195,6 +228,19 @@ The shapes that mean you stopped too early, all of them observed:
   the answer to that sentence on 2026-09-15 was "I always want". Take the action; if something
   genuinely blocks it, say what blocks it in one line.
 - A diagnosis with no edit. The finding is not the deliverable.
+- Filing a fix instead of starting it (user directive 2026-11-10: "The only time I would want you
+  to mention a fix and not work on it is if you're blocked when it relates to what we are working
+  on already"). A gap the user points out, or one you find, is worked on in the same turn: a
+  background agent in its own worktree when it touches files other work is changing. "It waits for
+  the other change, which edits the same files" is not a blocker; a separate worktree takes it.
+  Only a real blocker -- an external one, or a running task whose result the fix needs -- lets a
+  filed fix wait, and the closing message names it. A running job is not a blocker for applying a
+  written fix to files it has already loaded (user, 2026-11-20: "yes, your quoted message and my
+  last message are consistent, but inconsistent with yoru actions", after "I'll apply it when the
+  kit run (b3fgttzcf) ends"): the edit changes it only if it restarts, so apply it now. Enforced by
+  `.cupcake/policies/claude/no_filed_not_started.rego` over
+  `.cupcake/signals/last_assistant_filed_not_started.sh` (`scripts/cupcake_filed_not_started.py
+  --selftest`, fixtures `filed_*.jsonl` in `scripts/test-cupcake-stop-guards.py`).
 
 A turn MAY legitimately end on the user, and these are the only cases:
 
@@ -230,6 +276,317 @@ it in the transcript. Enforced by `.cupcake/policies/claude/no_unexplained_runni
 `.cupcake/signals/last_assistant_unexplained_running_tasks.sh`, tested by
 `scripts/test-unexplained-running-tasks-signal.py` and `scripts/test-cupcake-stop-guards.py`.
 
+What runs is read, never inferred (user words 2026-11-11: "I refuse to tell you, and encourge you to
+find a way to self discover what shells you kick off. I didn't run any shells"). The shells of this
+Claude Code session and of its subagents, who started each and what it is doing, and the agents still
+working come from `python3 scripts/cupcake_session_tasks.py` (`--brief`, `--json`), which reads the
+process table under the Claude Code process and the session's transcripts; a subagent's shells never
+reach the main transcript, so the transcript alone cannot say. While anything runs, each turn opens
+with that report, injected by `.cupcake/policies/claude/session_tasks_context.rego` over
+`.cupcake/signals/session_tasks.sh`. A closing message that pauses names what it is blocked on from
+that report: a shell's task id, or an agent's id or description ("blocked on bx12, the board
+regeneration"). The Stop guard `.cupcake/policies/claude/idle_hold.rego`
+(ER-EFFECTS-PAUSE-NAMES-BLOCKER) over `.cupcake/signals/last_assistant_idle_hold.sh` halts a paused
+message that names none of it and quotes the report. Tested by `python3 scripts/cupcake_session_tasks.py
+--selftest`, `scripts/test-session-tasks-signal.py`, `scripts/test-idle-hold-signal.py` and
+`scripts/test-cupcake-stop-guards.py`; `scripts/audit-idle-hold-replay.py` replays past Stop boundaries.
+
+A subagent that has finished is consumed and then closed with TaskStop before the turn ends (user
+directive 2026-11-11: "If I ever see a subagent that is finished but hasn't been closed, I always
+have VERY HIGH concerns that you consumed its results. I'm VERY WORRIED that you missed the changes
+UNTIL you close it"). Finished means its latest notification says "finished", not "is waiting on its
+own background work"; a SendMessage that resumes it reopens it until it next notifies; a TaskStop the
+harness refuses because the agent already completed still closes it. Enforced by
+`.cupcake/policies/claude/no_unclosed_finished_agents.rego` over
+`.cupcake/signals/last_assistant_unclosed_finished_agents.sh` (`finished_open_agents` in
+`scripts/cupcake_turn_scan.py`), tested by `scripts/test-unclosed-finished-agents-signal.py` and
+`scripts/test-cupcake-stop-guards.py`. An agent that is waiting on its own background work is not
+closed until it finishes: a TaskStop on it kills that work (2026-11-11, a waiting agent's selftest).
+`.cupcake/policies/claude/no_stop_waiting_agent.rego` refuses one unless the user's last message names
+the agent or asks to stop it (`.cupcake/signals/task_stop_waiting_agent.sh`,
+`scripts/cupcake_task_stop_waiting_agent.py`, tested by `scripts/test-task-stop-waiting-agent-signal.py`).
+
+A subagent never arms a `Monitor`. Every Monitor event wakes the subagent, and each turn it ends
+after one sends the main session a task notification that has to be answered. A subagent waiting
+on its own long work runs one `run_in_background` Bash command whose exit is the event it needs
+(an until-loop on the run's done marker or its pid), reads the log when that exits, and reports
+progress only in its final result. The main session keeps Monitor, under
+`.cupcake/policies/claude/monitor_rate_limit.rego`. Enforced by
+`.cupcake/policies/claude/no_subagent_monitor.rego` (ER-EFFECTS-NO-SUBAGENT-MONITOR), a PreToolUse
+deny on `Monitor`, over `.cupcake/signals/subagent_id.sh`, which prints the hook event's `agent_id`:
+Claude Code sets it only on a subagent's events, and cupcake leaves it out of the policy's `input`.
+Tested by `.cupcake/tests/no_subagent_monitor_test.rego` and `scripts/test-cupcake-policies.py`,
+whose cases run the real signal.
+
+A forecast of time or effort cites a measured number, or is not made (user correction 2026-11-11:
+"You also estimated yesterday over 24 hours ago after I started this project that generating
+similiarity scores woudln't be a big lift", and "Should an LLM be prohibited from making non-cited
+claims about timelines?"). A closing message that says how long a run takes or has left states the
+measured number it projects from: a timed sample, the running job's pace, or a timing-log figure. A
+forecast of development effort ("nearly free", "not a big lift", "easy", "a couple of hours of
+work") has no such number before the work exists and is not made: say it is unmeasured. The
+reasoning and the record behind it are in `docs/agents/runtime-evidence.md`, "Forecasts of time and
+effort are claims, cited or not made". Enforced by `.cupcake/policies/claude/no_unmeasured_estimate.rego` over
+`.cupcake/signals/last_assistant_unmeasured_estimate.sh` (`scripts/cupcake_unmeasured_estimate.py
+--selftest`; `--replay` judges the closing messages of recent transcripts), tested by
+`scripts/test-unmeasured-estimate-signal.py` and the `unmeasured_estimate*.jsonl` fixtures in
+`scripts/test-cupcake-stop-guards.py`.
+
+Text in a markdown file is guidance, not a "rule" (user correction 2026-11-11: "This is probably the
+100th time I've told you that its logically inconsistent to use the word rule in reference to
+markdown files"). An entry in AGENTS.md, in `docs/agents/`, in a memory or in a note binds nothing:
+an agent can miss it or ignore it and nothing stops the turn that does. Only executable enforcement
+(a policy, a test, a hook) binds. So a closing message calls such an entry a note, a convention,
+guidance, or a description of what a guard enforces ("AGENTS.md describes it"), and keeps the word
+for a rego, policy or lint rule, a named guard's, or the game's. The word itself goes in quotes.
+Enforced by `.cupcake/policies/claude/no_markdown_rule.rego` over
+`.cupcake/signals/last_assistant_markdown_rule.sh` (`scripts/cupcake_markdown_rule.py --selftest`;
+`--replay` judges the closing messages of recent transcripts), tested by
+`scripts/test-markdown-rule-signal.py` and the `markdown_rule*.jsonl` fixtures in
+`scripts/test-cupcake-stop-guards.py`.
+
+A correction is encoded for future agents before the instance is touched (user directive 2026-11-11:
+"My largest concern is that every time I correct you, you fix the issue instead of fix it for future
+agents first"). When the user's message corrects how you work, the turn's first change is a guard
+plus tests under `.cupcake/`, or an AGENTS.md / `docs/agents/` entry where a guard is impossible,
+made directly or by an agent whose brief names those paths; reads may come first, and the fix to the
+instance comes after. If nothing can carry it, the closing message says why. The UserPromptSubmit
+policy `.cupcake/policies/claude/correction_encoded_first_reminder.rego` (signal
+`.cupcake/signals/user_prompt_correction.sh`) flags the correction when it is typed, and the Stop
+guard `.cupcake/policies/claude/correction_encoded_first.rego` (signal
+`.cupcake/signals/last_assistant_correction_encoded_first.sh`) halts a turn that acted first. Both use
+`scripts/cupcake_correction_first.py` (`--selftest`); tested by
+`scripts/test-correction-first-signal.py`, `scripts/test-cupcake-correction-classifier.py` (corpus
+`.cupcake/tests/corpus/correction_prompts.jsonl`) and `scripts/test-cupcake-stop-guards.py`.
+
+Every single write to a policy file leaves the policy set compiling. Cupcake compiles every policy
+before it runs any, so one that does not compile refuses every tool call in every session on that
+checkout, the edit that would repair it included, and only the user can undo that. Write a whole
+policy with one Write, or define a new function in the same Edit as its first call, or in an
+earlier one. The PreToolUse guard `.cupcake/policies/claude/rego_must_compile.rego`
+(ER-EFFECTS-REGO-MUST-COMPILE) denies a Write, Edit, MultiEdit or Bash write that would leave a
+`.rego` under a `.cupcake` directory failing to compile, and quotes opa. Its signal builds the
+content the write would leave, puts it in a copy of that `.cupcake` directory, lets cupcake pick
+the files it would compile, and runs `opa check` on exactly that set. A file the engine does not
+load (`tests/`, `signals/`, a policy with no METADATA block) is not judged, and the write is allowed
+when the check cannot run (no opa or cupcake, a timeout). Enforced by
+`.cupcake/policies/claude/rego_must_compile.rego` over `.cupcake/signals/rego_compile_check.sh`
+(`scripts/cupcake_rego_compile_check.py --selftest`), tested by
+`.cupcake/tests/rego_must_compile_test.rego` and `scripts/test-rego-compile-check-signal.py`.
+
+When the user is waiting on a run's result, the job is to get that run done and hand over the
+result (user correction 2026-11-12: "You're telling me lots of stuff that has nothing to do with
+you running and giving me a complete result"). A run that failed or was stopped is diagnosed,
+fixed and started again in the same stretch of work: the user asking for its result is the ask
+to run it, and a fix that is in but not run is not a result. A closing message carries the result,
+or the running job's id and what it is doing; the causes found, the checks passed, the timings
+and side findings go to the commit message, the docs and the bd issue, not to the user. No guard
+carries this: what counts as the result is a judgement a signal script cannot make.
+
+That includes a run the harness killed. Neither a restart nor an offer of one comes before the
+diagnosis (user correction 2026-11-17: "I do have a standing rule to re-run something without
+understanding why it broke, how to fix it, or if its a real issue", after the agent answered a
+memory-pressure kill with "Reply `restart`"). The harness's notice that the kill "says nothing
+about the command" is a claim to check, not the diagnosis. Read the kernel and journal record for
+the kill time (`journalctl -k`, systemd-oomd, `/proc/pressure/memory`), and the run's own peak
+memory (workers times RSS). Name what held the memory. Then fix the run if it was the cause, or
+show that it was not before restarting. No guard carries this: whether a kill was diagnosed is a
+judgement a signal script cannot make.
+
+A run of hours shares this machine with the user, who will at some point use a lot of memory
+(user correction 2026-11-18: "Sometimes, when you run something that takes 24 hours on this
+computer, something the user does will use a lot of memory and cause this problem recurrently. I
+think you have to figure out a way to shrink the memory footprint and or segment runs so that they
+can be resumed"). The kit run that day was stopped by its memory guard at 9h50m, 139 of 218 sets
+done, while its own memory had been flat for 3 hours and other programs grew 7 GiB; an `--only` run
+kept no sets, so all 139 were lost. So a long run is built to lose little when stopped:
+- Every run keeps each finished unit of work on disk as it ends and reads those back on a restart
+  (attack similarity: `save_set`/`load_set`, for `--only` runs as well as full ones). A run that
+  keeps nothing is not started for hours of work.
+- A stop for memory pressure resumes on its own once memory is back, rather than ending the run.
+- A worker gives its memory back between units (a fresh worker per unit), so the run's footprint
+  is the units in flight, not everything its workers ever touched.
+No guard carries this yet: which runs are long, and what their unit of work is, is a judgement a
+signal script cannot make.
+
+A model question is checked on the items it names before a full run is spent on it (user
+correction 2026-11-16: "And you think the full run will be revealing instead of targeting specific
+weapons?"). A full attack-similarity run takes about 12 hours and recomputes everything whenever
+any loaded script changes. That day the agent restarted one while a fix to the same model was
+still being written, which made that run's 12 hours throwaway. Its last two model errors were found
+by looking at specific items, never by a full run: a stale cache warning, and the user asking about
+Rosus's Summons' three bursts. So:
+- Run the items in question, and the candidates that could displace them, first, with `--only`
+  A subset runs each member's lookalike group whole (selftest check 32), so its nets are meant to
+  equal the full run's for those items.
+- Start the full run only when no fix to the model is in flight, because it is needed only to rank
+  across every attack.
+No guard carries this: whether a fix in flight touches the run's model is a judgement a signal
+script cannot make.
+
+A "best" answer ranks every candidate the build can use, or it is not given as the best (user
+correction 2026-11-19: "The Intelligence build's top sorceries are invalid results if the run didn't
+rank all spells that require intelligence or more accurately, can be used by that build"). The agent
+had reported a best spell pair and a sorcery ranking from a 37-attack `--only` list picked by hand,
+which left out Carian Slicer and other sorceries the line can cast. So:
+- The candidate list of a kit or ranking question comes from the game data, not from a hand list:
+  every spell the line can cast (`Context.cast_short` empty, its catalyst included) and every skill
+  on a weapon it can wield (`Context.wields`). A narrower `--only` list is for checking a model
+  question on named items (the note above), never for naming a winner.
+- A result from a subset says so in the same sentence ("of the 37 attacks run"), and the
+  candidates it left out are named or counted.
+No guard carries this: whether a reply's "best" covers every candidate is a judgement a signal
+script cannot make.
+
+A result that answers a question asked in an earlier turn opens by quoting that question (user
+correction 2026-11-14: "You said no but I don't know what the question was because it was over 12
+hours ago", of a reply that opened "No." on a question asked before an 18-hour run). The user has
+moved on since asking, so the reply carries the question, verbatim and short, then the answer to it.
+No guard carries this: whether a closing message answers an earlier question is a judgement a
+signal script cannot make.
+
+A question about a running job never holds the job's fix hostage (user correction 2026-11-15: "the
+majority of the cost came from you asking me and waiting for a response while I was sleeping").
+The agent asked whether to restart a full run that was still in its selftest, with the restart as
+the recommended option; the answer came 12 hours later, when the run was 94% through, and the
+restart threw that away. When the answer's cost grows with the hours it takes to arrive, and the
+evidence already says which option is right (a known-wrong model, a run not yet past its cheap
+phase), take the recommended option at once and say so in the closing message: the user can undo
+it on waking, while hours of a run on known-wrong code cannot be got back. Ask, and wait, only when
+the options are close or the action destroys work the user values that the evidence does not show
+to be wrong. This narrows "ask before stopping a run the user watches": that note guards a run
+from being stopped for a cosmetic fix, not from a fix to the result it is computing. No guard
+carries this: whether waiting changes a decision's cost is a judgement a signal script cannot make.
+
+A user's reaction to a result is not a new constraint on it (user correction 2026-11-14: "Why would
+you choose to build without death's poker? Just because I said "Oh no"?", after the agent answered
+"Oh no...ghostflame ignition is the better version of ghostflame call, but its unique to one weapon
+:(" with a re-ranking that dropped Death's Poker). Disappointment, surprise or a remark about an item
+leaves the answer standing: the model's pick stays the answer, and a variant that excludes something
+is computed only when the user asks for it. If the remark states a mechanic, check it against the
+model and say whether it agrees. No guard carries this: whether a remark asks for a change or only
+reacts is a judgement a signal script cannot make.
+
+A reply carries what the user asked for and nothing they did not (user correction 2026-11-24: "I
+didn't ask", after the agent answered the bare statement "Water is blue" with a paragraph on O-H
+absorption; the same day, of "The tag is 1.2.0 with no leading v" tacked onto a release report: "Is
+this information for me? Or for you in future releases?"). A statement is not a question: answer
+it only as far as it needs an answer, and add no explanation, background or side fact the user did
+not request. A fact the agent tripped over while working (a lookup that missed, a format it had to
+discover) belongs in the repo or in a memory if a future agent needs it, never in the reply. A
+pause while a check suite runs is the same (user, 2026-11-25: "Is there a reason why you're
+reporting on which number passed? Is nine relevant?", of "Nine of the pre-push stages for #630
+have passed"): a tally of what passed so far changes nothing the user would do. The pause names the
+task id it is blocked on and, if one exists, the red stage and its fix; nothing else. No guard
+carries this: whether a sentence was asked for is a judgement a signal script cannot make, and a
+count of passed stages is also what an evidence line rightly carries.
+
+A reply to a what, how, why or which question opens with the answer, not with something that did
+not happen. The Stop guard `.cupcake/policies/claude/no_negated_opener.rego`
+(ER-EFFECTS-NO-NEGATED-OPENER) halts a turn when the user's prompt holds a question sentence
+starting with what, how, why or which (after filler such as "OK, so"), the question does not
+itself ask about change or absence ("what changed?", "what's left?", "which failed?"), and the
+closing message's first prose sentence starts with Nothing or None. Who and when questions are
+left out, since "Nobody" or "Not before 3" can be their answer. A rewrite after a halt is judged
+against the Stop hook's own feedback, which holds no such question, so it is never halted twice.
+Enforced by `.cupcake/policies/claude/no_negated_opener.rego` over
+`.cupcake/signals/last_assistant_negated_opener.sh` (`scripts/cupcake_negated_opener.py
+--selftest`), tested by `.cupcake/tests/no_negated_opener_test.rego` and the `negated_opener*.jsonl`
+fixtures in `scripts/test-cupcake-stop-guards.py`.
+
+A question the user asks about a game cost the model leaves out is pointing at the model, not
+asking to be taught (user correction 2026-11-12: "this information wasn't for me; I already had
+plenty of intuition about this", on "how seriously does heavy roll impact the build compared to
+more damage stats?", asked right after the model's Intelligence line, END 33, was shown unable to
+carry weapons, swaps and 89 poise at medium roll). The user knows the game; what they lack is the
+model reflecting it. So measure the cost, then put it into the model's inputs (here: an attacker
+build is a line whose Endurance keeps its loadout at medium roll), and the closing reports what
+the model now does with it. A stat a line holds at a floor because "the model prices nothing it
+buys" is the same gap, found before the user has to ask (user, 2026-11-12: "it sounds like we put
+no value on mind then?", of an agent brief that left MND at the class base): before fixing any
+stat, search the repo's other models for a price of what it buys (`er-mechanics-pouch`'s FP plan
+already prices Mind as Crimson flasks kept) and use it, or say in the brief that none exists. The
+price counts every source of what the stat buys, not the stat alone (user, the same day: "Most
+people put almost no points into mind and no more than 1 or 2 blue flasks when in invasions ...
+because starlight shards exist and the craftable DLC item to give FP"): FP comes from the bar,
+the FP items that refill it between engagements, and Cerulean flasks, so Mind buys only the FP
+one engagement spends before an item can refill it. No
+guard carries this either: whether a question asks for knowledge or points at a gap is a judgement
+a signal script cannot make.
+
+The model's accuracy and consistency are the agent's to establish, not the user's to referee
+(user correction 2026-11-16: "I don't know what the model is doing, I just want it to be accurate,
+and logically consistent", after the agent explained Savage Claws' landing by the model's rules,
+said a whiffing opponent's recovery held him, and only on the user's follow-up read the code and
+found the caught-defender play ignores that recovery although the same situation's dodge floor
+gates every press before the catch). So:
+- Before a reply explains a result by "the model's rules", read the rule in the code, and check
+  it against the game and against every other stage of the model that uses the same input. A
+  closing message never states model behavior it has not read.
+- When one stage honors a constraint another ignores (a floor, a reach, a poise, a cue), that is
+  a defect: say so plainly and start the fix in the same turn.
+- Answer in game terms: what lands, what it costs, and how sure. Model internals go in the code
+  comments and docs, not to the user, unless the user asks for them.
+No guard carries this: whether a reply's explanation matches code it has read is a judgement a
+signal script cannot make.
+
+Corpus builds say what players run, not what is good (user correction 2026-11-12: "111 real
+Intelligence builds might all be bad builds :)", then "I told you this information because I think
+you're overvaluing real builds", after the agent justified an INT 65 line as the median of 111
+corpus builds and argued a line was realistic because 95% of corpus mages wear under 89 poise).
+Never cite corpus prevalence as the reason a stat, a piece of gear or a model input is right. What
+a build should be comes from the game: its graphs and soft caps, equip load and roll tiers, the
+poise breakpoints, and the outcome model. The corpus stays the source for what the opponent pool
+is and for usage questions ("what do players run"), and is named as such when used. A usage
+figure fed into a model line is the same mistake (user, 2026-11-12: "46 endurance seems a little
+crazy given it can't use weapons though", of an Intelligence line, STR 15 / DEX 11, whose medium
+roll budget carried the 12.5 weight its archetype's corpus builds hold in their hands): a line
+carries the weight of what its own stats can wield, never what its archetype's players carry.
+This repeats
+the user's 2026-11-10 words in attack-similarity.md section 6a: "Having real builds on Nyasu is
+irrelevant to objectives". No guard carries this: whether a corpus figure is used as a usage fact
+or as a justification is a judgement a signal script cannot make.
+
+An item that buys an effect is a choice, never a default (user correction 2026-11-13: "Its not
+like people will always use either talisman, or the shield for increased regen", of a brief that
+would add the turtle talismans' stamina regeneration to the regen scores). A talisman, a shield
+or a buff that a build may or may not carry enters a model in only two ways:
+- **For an opponent of the pool:** the pool row's own equipment, read per row.
+- **For an attacker line:** only when the model's pick for that slot prices the item above what
+  else the slot would hold, the same way a stat above its floor is priced. Its value is reported
+  as an option ("with Green Turtle: ..."), never folded into a line that did not choose it.
+No guard carries this: whether an item is a priced choice or an assumed default is a judgement a
+signal script cannot make.
+
+A game mechanic the user states is a lead to verify, never the fact a model is built on (user
+correction 2026-11-13: "It sounds like you built something entirely based on user feedback instead
+of facts?"). The burden of proof is the agent's, for the user's claims and its own alike (the user,
+the same day: "Unfortunately, the burden is on you to prove user's statement of facts and your own
+with citations"):
+- Every mechanic a model uses, or a reply states, carries a citation: an address or decompile
+  line, a param row, or a measurement with the command that produced it.
+- A claim without a citation is marked `INFERRED`. An `INFERRED` rule already in a model is a debt
+  to prove, not a settled input.
+
+The agent had coded "a weapon's passive counts from any equipped slot" from the
+user's "I get benefits from shield on back", then recoded it from the user's next message, with no
+read of the game in between. The rules for such a claim:
+- **Establish it first.** Before a model encodes where, when or how much a mechanic applies, the
+  game's own code or params establish it. Read statically first (`docs/agents/ghidra.md`).
+- **Quote the user's words as the hypothesis.** They go in the brief, quoted, as the hypothesis to
+  check. In the code they may appear as `USER-STATED` only beside the citation that verifies them.
+- **Until the read exists, change nothing.** The model keeps its previous behavior, marked
+  `INFERRED`, and the closing message names the read that is running.
+- **A habit is not a mechanic.** A player's own habit ("I don't use it to block because other
+  shields are better") is a usage fact about one player. It never sets the pool's behavior or a
+  line's behavior.
+
+The line "game facts the user states are ground truth" under "Never instruct the user in their
+own game" covers how to play: orders and menus. It does not cover a number or a rule a model
+computes. No guard carries this: whether a sentence states a mechanic or a usage habit is a
+judgement a signal script cannot make, and a guard on the `USER-STATED` label would only teach
+agents to drop the label.
+
 ## RTK / Code Search Caveat
 
 **Do NOT rely on `rtk` (the workspace RTK inspection wrapper) for code or identifier searches -- it produces false negatives and mangled output.** `rtk grep` REDACTS/aliases certain identifier tokens in BOTH its output AND its matching, so a search for a token that is actually present returns zero matches or garbled text. Confirmed redacted/aliased tokens include `online`, `continue`, `splash`, `experiments` (shown as `n`/`ln`), `input`, `block`, and `GOLD_SAVE` (shown as `n`) -- among others. Concretely, `rtk grep -n "fn apply_online_disable"` returns no matches even though the function exists, and `rtk grep "ONLINE_DISABLE_RVA"` exits 1 on a symbol that is present. `rtk find` / `rtk ls` are likewise flaky (empty output for valid queries). Treat any rtk-grep zero-result as untrustworthy, never as proof of absence.
@@ -255,7 +612,7 @@ file that already fails, latent tech debt -- is to be treated as **solely genera
 pre-authorized by the user**. Do NOT disclaim it ("not mine", "pre-existing", "out of scope",
 "someone else committed this") and move on. You own it.
 
-Handling rule:
+Handling:
 - **Default: parallel background subagent.** If the issue does NOT interfere with your current task,
   dispatch a background subagent to fix it (make the gate green, remove the violation) while you keep
   working on your original objective. It is a real deliverable, not a footnote -- see it through to a
@@ -274,7 +631,7 @@ Handling rule:
   tree is fine (it must avoid the exact files you are editing).
 
 The pre-authorization is standing, so you do not need to ask before fixing a pre-existing issue; just
-fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
+fix it (in parallel, first, or worktree-isolated as described above) and report it alongside your
 main work.
 
 ## Commits And Lints Wait For The User's `authorize commit` (user directive 2026-10-17)
@@ -288,7 +645,7 @@ What happened: a subagent committed in a gitignored worktree on a persistent dri
 preserved nothing the worktree was not already keeping, and its hooks ran the check suite while the
 user was playing a game.
 
-The rule:
+Concretely:
 
 - **A subagent never commits and never runs a lint or formatter.** Not in the main tree, not in a
   worktree, not with `git -C`, whatever the conversation says. It leaves its changes uncommitted
@@ -314,13 +671,13 @@ The signal reads the session transcript the same way the push signal does, share
 records spent authorizations in the gitignored `.cupcake/state/commit-authorizations.jsonl`. When
 either guard denies, it names the phrase to ask for.
 
-This replaces the 2026-07-17 / 2026-07-21 "Commit Timing" rule, which told agents to commit after a
+This replaces the 2026-07-17 / 2026-07-21 "Commit Timing" section, which told agents to commit after a
 completed runtime run without asking. A completed run is now a reason to ask for `authorize commit`,
 not a reason to commit.
 
 For **`bd remember`**: record a memory **after** a step, and **only if the finding is worth keeping**
 (validated, durable, non-obvious) -- not eagerly for every intermediate hypothesis or run. The bd
-memory commit-immediately-after-runtime-validation-2026-07-17 describes the replaced commit rule and
+memory commit-immediately-after-runtime-validation-2026-07-17 describes the replaced commit practice and
 no longer governs commits.
 
 ## Session Completion
@@ -389,7 +746,7 @@ no longer governs commits.
    branches named
 7. **Hand off** - Provide context for next session / review path
 
-**CRITICAL RULES:**
+**CRITICAL POINTS:**
 - Never commit without the user's exact `authorize commit` reply, one commit per reply; never run a
   lint or formatter outside that window; a subagent does neither
 - Never push without the user's exact `authorize <sha>` reply for that branch's tip, one push per

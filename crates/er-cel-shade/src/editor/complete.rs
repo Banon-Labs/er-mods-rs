@@ -1,5 +1,5 @@
 //! Completion for the Code tab's editor: what can be written at the cursor, ranked, and the edit
-//! that writes it (er-effects-rs-zxlx.3).
+//! that writes it.
 //!
 //! Everything here is a function of a layer's text and a byte offset into it, so the popup that
 //! shows it can call it from inside Dear ImGui's text callbacks, where a panic cannot unwind:
